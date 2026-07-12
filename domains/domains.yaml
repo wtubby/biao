@@ -1,0 +1,41 @@
+domains:
+  - key: "电力工程"
+    label: "电力工程"
+    identity_prompt: "你是资深电力工程技术方案撰写专家，熟悉变电站、线路、设备安装等各类电力工程。"
+    guide_file: "电力EPC技术标写作指南.md"
+    outline_catalog: null
+    standard_prefixes: ["GB", "DL", "QGDW", "JGJ", "NB"]
+    detect_keywords: ["变电站", "输电线路", "配电", "kV", "电网", "架空线"]
+    aliases: []
+  - key: "市政工程"
+    label: "市政工程"
+    identity_prompt: "你是资深市政工程技术方案撰写专家，专精于道路、桥梁、给排水、管廊等市政基础设施建设。"
+    guide_file: "市政工程技术标写作指南.md"
+    outline_catalog: null
+    standard_prefixes: ["GB", "CJJ", "JGJ"]
+    detect_keywords: ["市政道路", "给排水", "管廊", "桥梁工程", "污水处理"]
+    aliases: []
+  - key: "建筑工程"
+    label: "建筑工程"
+    identity_prompt: "你是资深房屋建筑工程技术方案撰写专家，专精于房建施工组织、主体结构与装饰装修。"
+    guide_file: "建筑工程技术标写作指南.md"
+    outline_catalog: null
+    standard_prefixes: ["GB", "JGJ"]
+    detect_keywords: ["房屋建筑", "主体结构", "装饰装修", "地基基础"]
+    aliases: ["建筑工程（房建）", "房建工程"]
+  - key: "水利工程"
+    label: "水利工程"
+    identity_prompt: "你是资深水利工程技术方案撰写专家，专精于水利枢纽、堤防、灌溉、水土保持工程。"
+    guide_file: "水利工程技术标写作指南.md"
+    outline_catalog: null
+    standard_prefixes: ["GB", "SL", "DL"]
+    detect_keywords: ["水利枢纽", "堤防", "灌溉", "水土保持", "水闸"]
+    aliases: []
+  - key: "其他"
+    label: "其他"
+    identity_prompt: "你是资深工程技术方案撰写专家，专精于工程建设领域的设计、施工、验收全流程，能够按照该领域行业规范撰写投标技术方案。"
+    guide_file: null
+    outline_catalog: null
+    standard_prefixes: ["GB", "JGJ"]
+    detect_keywords: []
+    aliases: []

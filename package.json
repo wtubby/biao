@@ -1,0 +1,12 @@
+{
+  "private": true,
+  "scripts": {
+    "build:frontend": "node scripts/compile_frontend.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  },
+  "dependencies": {
+    "docx-preview": "^0.4.0"
+  }
+}

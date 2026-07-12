@@ -1,0 +1,374 @@
+import {
+  useState, useEffect, useCallback, useRef,
+  Switch, Input, Select, Slider, Checkbox, message, Spin, Upload, Button, Space,
+  Text,
+} from '../../globals.js';
+
+import {
+  fetchGenerationConfig,
+  updateGenerationConfig,
+  uploadReferenceBid,
+} from '../../api/generationConfig.js';
+import { changeGenerationMode } from '../../api/outline.js';
+import { DisplayModeSwitch } from '../outline/components.jsx';
+
+const CHART_OPTIONS = [
+  { value: 'none', label: '无' },
+  { value: 'normal', label: '适中' },
+  { value: 'abundant', label: '大量' },
+];
+
+const STANDARDS_OPTIONS = [
+  { value: 'epc_guide', label: '电力 EPC 写作惯例（非标准条文）' },
+  { value: 'none', label: '不附加' },
+];
+
+import { buildPagesEstimate, formatWordsDisplay } from '../../lib/wordEstimate.js';
+
+function ConfigRow({ label, children, className = '' }) {
+  return (
+    <div className={`generation-config-row${className ? ` ${className}` : ''}`}>
+      <span className="generation-config-label">{label}</span>
+      <div className="generation-config-control">{children}</div>
+    </div>
+  );
+}
+
+function GenerationConfigPanel({
+  projectId,
+  disabled = false,
+  showWordSlider = true,
+  showModeSwitch = true,
+  generationMode = 'full',
+  onGenerationModeChange,
+  onConfigUpdated,
+}) {
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [pagesSaving, setPagesSaving] = useState(false);
+  const [config, setConfig] = useState(null);
+  const savedReferenceTextRef = useRef('');
+  const draftReferenceTextRef = useRef('');
+  const pagesPatchSeqRef = useRef(0);
+
+  const applyConfigResult = (data) => {
+    const { success: _success, ...rest } = data || {};
+    setConfig(rest);
+    const refText = rest.reference_bid_text || '';
+    savedReferenceTextRef.current = refText;
+    draftReferenceTextRef.current = refText;
+    return rest;
+  };
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await fetchGenerationConfig(projectId);
+      applyConfigResult(data);
+    } catch (e) {
+      message.error(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [projectId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const patchConfig = async (patch, options = {}) => {
+    if (disabled) return;
+    const quiet = !!options.quiet;
+    if (!quiet) setSaving(true);
+    try {
+      const result = await updateGenerationConfig(projectId, patch);
+      const cleaned = applyConfigResult(result);
+      onConfigUpdated?.(cleaned, {
+        outlineChanged: Object.prototype.hasOwnProperty.call(patch, 'target_pages')
+          || Object.prototype.hasOwnProperty.call(patch, 'custom_word_count')
+          || Object.prototype.hasOwnProperty.call(patch, 'custom_total_words'),
+        quiet,
+      });
+    } catch (e) {
+      message.error(e.message);
+    } finally {
+      if (!quiet) setSaving(false);
+    }
+  };
+
+  const handlePagesChange = (v) => {
+    const wpp = config?.estimate?.words_per_page ?? 780;
+    setConfig((c) => ({
+      ...c,
+      target_pages: v,
+      custom_word_count: false,
+      estimate: {
+        ...(c.estimate || {}),
+        ...buildPagesEstimate(v, wpp),
+      },
+    }));
+  };
+
+  const handlePagesCommit = async (v) => {
+    if (disabled) return;
+    const seq = ++pagesPatchSeqRef.current;
+    setPagesSaving(true);
+    handlePagesChange(v);
+    try {
+      const result = await updateGenerationConfig(projectId, {
+        target_pages: v,
+        custom_word_count: false,
+      });
+      if (seq !== pagesPatchSeqRef.current) return;
+      const cleaned = applyConfigResult(result);
+      onConfigUpdated?.(cleaned, { outlineChanged: true, quiet: true });
+    } catch (e) {
+      if (seq === pagesPatchSeqRef.current) message.error(e.message);
+    } finally {
+      if (seq === pagesPatchSeqRef.current) setPagesSaving(false);
+    }
+  };
+
+  const handleModeChange = async (mode) => {
+    if (disabled || mode === generationMode) return;
+    setSaving(true);
+    try {
+      const result = await changeGenerationMode({
+        projectId,
+        mode,
+        currentMode: generationMode,
+        locked: disabled,
+      });
+      if (!result) return;
+      onGenerationModeChange?.(result.mode || mode, result);
+      await load();
+      if (result.outline_updated) {
+        message.success(result.message);
+      } else {
+        message.info(result.message);
+      }
+    } catch (e) {
+      message.error(e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading || !config) {
+    return (
+      <div className="generation-config-panel generation-config-panel--loading">
+        <Spin size="small" tip="加载配置…" />
+      </div>
+    );
+  }
+
+  const estimate = config.estimate || {};
+  const targetPages = config.target_pages ?? 40;
+  const pageMin = config.target_pages_range?.min ?? 10;
+  const pageMax = config.target_pages_range?.max ?? 1200;
+  const wordsPerPage = config.estimate?.words_per_page ?? 780;
+
+  return (
+    <div className={`generation-config-panel${pagesSaving ? ' is-pages-saving' : ''}`}>
+      <div className="generation-config-inline-pair">
+        {showModeSwitch && (
+          <ConfigRow label="生成档位">
+            <DisplayModeSwitch
+              value={generationMode}
+              disabled={disabled || saving}
+              loading={saving}
+              onChange={handleModeChange}
+            />
+          </ConfigRow>
+        )}
+
+        <ConfigRow label="图表程度">
+          <Select
+            size="small"
+            className="generation-config-select"
+            disabled={disabled || saving}
+            value={config.chart_density || 'normal'}
+            options={CHART_OPTIONS}
+            onChange={(v) => patchConfig({ chart_density: v })}
+          />
+        </ConfigRow>
+      </div>
+
+      <ConfigRow label="写作惯例">
+        <Select
+          size="small"
+          className="generation-config-select generation-config-select--wide"
+          disabled={disabled || saving}
+          value={config.standards_pack || 'epc_guide'}
+          options={STANDARDS_OPTIONS}
+          onChange={(v) => patchConfig({ standards_pack: v })}
+        />
+      </ConfigRow>
+
+      <div className="generation-config-switches">
+        <label className="generation-config-switch-item">
+          <span className="generation-config-label">自有库</span>
+          <Switch
+            size="small"
+            checked={config.use_knowledge_library !== false}
+            disabled={disabled || saving}
+            onChange={(v) => patchConfig({ use_knowledge_library: v })}
+          />
+        </label>
+        <label className="generation-config-switch-item">
+          <span className="generation-config-label">以标写标</span>
+          <Switch
+            size="small"
+            checked={!!config.reference_bid_enabled}
+            disabled={disabled || saving}
+            onChange={(v) => patchConfig({ reference_bid_enabled: v })}
+          />
+        </label>
+        <label className="generation-config-switch-item">
+          <span className="generation-config-label">刚性绑定</span>
+          <Switch
+            size="small"
+            checked={config.require_risk_binding !== false}
+            disabled={disabled || saving}
+            onChange={(v) => patchConfig({ require_risk_binding: v })}
+          />
+        </label>
+        <label className="generation-config-switch-item">
+          <span className="generation-config-label">深度去痕</span>
+          <Switch
+            size="small"
+            checked={!!config.deep_humanize}
+            disabled={disabled || saving}
+            onChange={(v) => patchConfig({ deep_humanize: v })}
+          />
+        </label>
+      </div>
+
+      {showWordSlider && (
+        <div className="generation-config-pages">
+          <div className="generation-config-pages-header">
+            <span className="generation-config-label">标书篇幅</span>
+            <Text type="secondary" className="generation-config-meta">
+              约 {estimate.display_words || buildPagesEstimate(targetPages, wordsPerPage).display_words}
+              {' · '}
+              {estimate.estimated_pages || targetPages} 页
+            </Text>
+          </div>
+          <Slider
+            className="generation-config-slider"
+            min={pageMin}
+            max={pageMax}
+            step={5}
+            disabled={disabled || config.custom_word_count}
+            value={Math.min(pageMax, Math.max(pageMin, targetPages))}
+            onChange={handlePagesChange}
+            onAfterChange={handlePagesCommit}
+          />
+          <div className="generation-config-pages-custom">
+            <Checkbox
+              checked={!!config.custom_word_count}
+              disabled={disabled || saving || pagesSaving}
+              onChange={(e) => {
+                if (!e.target.checked) {
+                  patchConfig({ custom_word_count: false });
+                } else {
+                  setConfig((c) => ({ ...c, custom_word_count: true }));
+                }
+              }}
+            >
+              自定义字数
+            </Checkbox>
+            {config.custom_word_count && (
+              <div className="generation-config-pages-input">
+                <Input
+                  type="number"
+                  size="small"
+                  min={3000}
+                  max={500000}
+                  disabled={disabled || saving}
+                  value={config.custom_total_words || estimate.total_words || ''}
+                  onChange={(e) => setConfig((c) => ({
+                    ...c,
+                    custom_total_words: e.target.value ? Number(e.target.value) : null,
+                  }))}
+                  placeholder="总字数"
+                />
+                <button
+                  type="button"
+                  className="generation-config-inline-btn"
+                  disabled={disabled || saving}
+                  onClick={() => patchConfig({
+                    custom_word_count: true,
+                    custom_total_words: config.custom_total_words || estimate.total_words,
+                  })}
+                >
+                  应用
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {config.reference_bid_enabled && (
+        <div className="generation-config-ref">
+          <div className="generation-config-ref-header">
+            <span className="generation-config-label">参考标书</span>
+            <Space wrap size="small">
+              <Upload
+                accept=".pdf,.docx,.txt,.md"
+                showUploadList={false}
+                disabled={disabled || saving}
+                beforeUpload={async (file) => {
+                  setSaving(true);
+                  try {
+                    const result = await uploadReferenceBid(projectId, file);
+                    applyConfigResult(result);
+                    onConfigUpdated?.(result);
+                    message.success(result.message || '参考标书已导入');
+                  } catch (e) {
+                    message.error(e.message);
+                  } finally {
+                    setSaving(false);
+                  }
+                  return false;
+                }}
+              >
+                <Button size="small" disabled={disabled || saving}>上传</Button>
+              </Upload>
+              {config.reference_bid_filename && (
+                <Text type="secondary" className="generation-config-meta" ellipsis>
+                  {config.reference_bid_filename}
+                </Text>
+              )}
+            </Space>
+          </div>
+          <Input.TextArea
+            rows={2}
+            disabled={disabled || saving}
+            placeholder="也可粘贴历史中标技术标片段；无相关命中时不会注入文首无关内容"
+            value={config.reference_bid_text || ''}
+            onChange={(e) => {
+              const next = e.target.value;
+              draftReferenceTextRef.current = next;
+              setConfig((c) => ({ ...c, reference_bid_text: next }));
+            }}
+            onBlur={() => {
+              const next = draftReferenceTextRef.current || '';
+              if (next === savedReferenceTextRef.current) return;
+              patchConfig({ reference_bid_text: next });
+            }}
+          />
+          <button
+            type="button"
+            className="generation-config-inline-btn"
+            disabled={disabled || saving}
+            onClick={() => patchConfig({ reference_bid_text: draftReferenceTextRef.current || '' })}
+          >
+            保存文本
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export { GenerationConfigPanel };
