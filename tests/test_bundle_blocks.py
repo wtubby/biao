@@ -56,7 +56,9 @@ def test_format_retrieval_notes_adds_source_rule_when_chunks_present():
 
 def test_truncate_reference_bid_uses_service_limit():
     text = "参" * (REFERENCE_BID_CHAPTER_LIMIT + 100)
-    assert len(truncate_reference_bid(text)) == REFERENCE_BID_CHAPTER_LIMIT
+    result = truncate_reference_bid(text)
+    assert len(result) == REFERENCE_BID_CHAPTER_LIMIT
+    assert "系统已截断后续参考内容" in result
 
 
 def test_format_immediate_prior_sibling_block():
@@ -73,6 +75,16 @@ def test_format_immediate_prior_sibling_block():
     assert "A区、B区" in block
     assert "劳动力配置计划" in block
     assert "综上所述" in block
+    for line in block.splitlines():
+        if line.strip():
+            assert not line.startswith("    "), f"unexpected indent: {line!r}"
+
+
+def test_truncate_reference_bid_falls_back_to_min_suffix_when_limit_too_small():
+    text = "参" * 100
+    result = truncate_reference_bid(text, limit=10)
+    assert result == "参" * 7 + "..."
+    assert len(result) == 10
 
 
 def test_format_prior_skips_last_summary_when_sibling_body_present():

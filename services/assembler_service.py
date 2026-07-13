@@ -10,6 +10,8 @@ from docx.shared import Pt, RGBColor
 
 from chart.chart_service import (
     CHART_PATTERN,
+    collect_gantt_payloads_from_text,
+    merge_gantt_payloads,
     next_caption,
     parse_chart_match,
     render_flow,
@@ -22,6 +24,7 @@ from config import OUTPUT_DIR
 from db.models import Project, TechOutline
 from services.blind_bid_service import anonymize_cover_meta, blind_header_text, is_blind_bid
 from services.numbering_service import HeadingNumbering, resolve_heading_numbering_preset
+from services.outline_order import sort_outline_tree_dfs
 from services.word_styling import (
     add_blind_bid_header,
     apply_professional_styles,
@@ -278,14 +281,56 @@ def _write_paragraph_or_table(doc: Document, lines: list[str]) -> None:
 
 
 def _write_content_in_order(
-    doc: Document, content: str, chapter_level: int, temp_files: list[Path], duration: int, counters: dict
+    doc: Document,
+    content: str,
+    chapter_level: int,
+    temp_files: list[Path],
+    duration: int,
+    counters: dict,
+    *,
+    skip_gantt: bool = False,
 ) -> None:
     last_end = 0
     for match in CHART_PATTERN.finditer(content):
+        chart_type, _ = parse_chart_match(match)
+        if skip_gantt and chart_type == "GANTT_DATA":
+            last_end = match.end()
+            continue
         _write_text_block(doc, content[last_end:match.start()], chapter_level)
         _insert_chart(doc, match, temp_files, duration, counters)
         last_end = match.end()
     _write_text_block(doc, content[last_end:], chapter_level)
+
+
+def _collect_gantt_payloads(chapters: list[TechOutline]) -> list:
+    payloads: list = []
+    for ch in chapters:
+        payloads.extend(collect_gantt_payloads_from_text(ch.generated_content or ""))
+    return payloads
+
+
+def _append_document_gantt(
+    doc: Document,
+    payloads: list,
+    duration: int,
+    temp_files: list[Path],
+    counters: dict,
+) -> None:
+    """全文末尾插入合并后的整体施工进度横道图。"""
+    merged = merge_gantt_payloads(payloads)
+    if not merged:
+        return
+    doc.add_page_break()
+    appendix_heading = doc.add_heading("施工进度横道图", level=1)
+    appendix_heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    try:
+        img = render_gantt(merged, duration)
+        _insert_chart_image(doc, img, Pt(450), temp_files, counters, "GANTT_DATA")
+    except Exception as exc:
+        logger.warning("全文甘特图渲染失败: %s", exc)
+        img = render_warning_image("GANTT_DATA")
+        _insert_picture_centered(doc, img, Pt(400))
+        temp_files.append(img)
 
 
 def _should_emit_heading(chapter: TechOutline) -> bool:
@@ -337,8 +382,10 @@ def assemble_document(
     if is_blind_bid(project):
         for section in doc.sections:
             add_blind_bid_header(section, blind_header_text())
+    chapters = sort_outline_tree_dfs(chapters)
     heading_numbering = HeadingNumbering(doc, resolve_heading_numbering_preset(project))
     emit_levels = _compute_heading_emit_levels(chapters)
+    gantt_payloads = _collect_gantt_payloads(chapters)
     temp_files: list[Path] = []
     duration = project.duration_days or 90
     counters: dict = {}
@@ -348,7 +395,8 @@ def assemble_document(
         for ch in chapters:
             if not _should_emit_heading(ch):
                 continue
-            if ch.level == 1:
+            emit_level = emit_levels.get(ch.id, ch.level)
+            if emit_level == 1:
                 if seen_level1:
                     doc.add_page_break()
                 seen_level1 = True
@@ -356,7 +404,6 @@ def assemble_document(
             heading_title = ch.title
             if mark_yellow and ch.is_leaf == 1 and ch.review_status == "yellow":
                 heading_title = f"{ch.title}【待优化】"
-            emit_level = emit_levels.get(ch.id, ch.level)
             try:
                 heading_para = doc.add_heading(heading_title, level=min(emit_level, 4))
             except Exception:
@@ -365,7 +412,11 @@ def assemble_document(
 
             content = ch.generated_content or ""
             if content.strip():
-                _write_content_in_order(doc, content, emit_level, temp_files, duration, counters)
+                _write_content_in_order(
+                    doc, content, emit_level, temp_files, duration, counters, skip_gantt=True,
+                )
+
+        _append_document_gantt(doc, gantt_payloads, duration, temp_files, counters)
 
         apply_professional_styles(doc)
         enable_auto_update_fields(doc)

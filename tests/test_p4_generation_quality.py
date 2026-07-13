@@ -266,5 +266,5 @@ def test_writer_and_qa_prompts_include_prior_and_plan():
     assert "前序章节已写要点" in writer
     assert "招标文件已知矛盾" in writer
     qa = build_qa_user_prompt("正文内容足够长用于质检。" * 20, bundle)
-    assert "写作规划必须覆盖要点" in qa
+    assert "本章写作规划预期覆盖要点" in qa
     assert "前序章节摘要" in qa

@@ -142,8 +142,7 @@ def test_next_caption_number_increments_per_kind_independently():
 
 
 def test_insert_chart_gantt_block_format_object():
-    """块格式 [GANTT_DATA]\\n{tasks:...} 应渲染为图片而非原文。"""
-    from chart.chart_service import CHART_PATTERN
+    """章内甘特占位符导出时跳过，不在本章插图。"""
     from services.assembler_service import _write_content_in_order
 
     content = """进度计划如下：
@@ -160,8 +159,57 @@ def test_insert_chart_gantt_block_format_object():
 
 后续说明文字。"""
     doc = Document()
-    _write_content_in_order(doc, content, 2, [], 180, {})
+    _write_content_in_order(doc, content, 2, [], 180, {}, skip_gantt=True)
     assert not any("GANTT_DATA" in p.text for p in doc.paragraphs)
+    assert len(doc.inline_shapes) == 0
+    assert any("后续说明文字" in p.text for p in doc.paragraphs)
+
+
+def test_assemble_document_appends_single_gantt_at_end():
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from services.assembler_service import assemble_document
+
+    project = SimpleNamespace(
+        id="p1",
+        name="测试工程",
+        voltage_level="110kV",
+        capacity="",
+        location="",
+        duration_days=180,
+        extra_params=None,
+    )
+    gantt = '[GANTT_DATA: [{"工序": "基础施工", "开始第几天": 1, "持续天数": 30}]]'
+    chapters = [
+        SimpleNamespace(
+            id="1", parent_id=None, title="概述", level=1, is_leaf=0,
+            generated_content=None, review_status="green", sort_order=1,
+        ),
+        SimpleNamespace(
+            id="1.1", parent_id="1", title="工程概况", level=2, is_leaf=1,
+            generated_content=f"正文段落。{gantt}", review_status="green", sort_order=1,
+        ),
+        SimpleNamespace(
+            id="2", parent_id=None, title="施工方案", level=1, is_leaf=1,
+            generated_content=gantt, review_status="green", sort_order=2,
+        ),
+    ]
+
+    with __import__("tempfile").TemporaryDirectory() as tmp:
+        import services.assembler_service as asm
+
+        old_out = asm.OUTPUT_DIR
+        asm.OUTPUT_DIR = tmp
+        try:
+            with patch("services.assembler_service.append_toc_and_body_sections"):
+                path = assemble_document(project, chapters)
+            doc = Document(str(path))
+        finally:
+            asm.OUTPUT_DIR = old_out
+
+    gantt_paras = [p for p in doc.paragraphs if "GANTT_DATA" in (p.text or "")]
+    assert not gantt_paras
     assert len(doc.inline_shapes) == 1
     captions = [p.text for p in doc.paragraphs if p.text.startswith("图")]
     assert captions == ["图1 施工进度横道图"]

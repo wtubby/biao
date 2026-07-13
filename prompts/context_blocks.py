@@ -93,20 +93,16 @@ def format_generation_extras(bundle: dict, *, style: ExtrasStyle = "writer") -> 
     extras: list[str] = []
     chart_hint = (bundle.get("chart_density_hint") or "").strip()
     if chart_hint:
-        if style == "plan":
-            extras.append(f"## 图表要求\n{chart_hint}")
-        else:
-            extras.append(f"图表要求：{chart_hint}" if style == "qa" else f"## 图表要求\n{chart_hint}")
+        extras.append(
+            f"图表要求：{chart_hint}" if style == "qa" else f"## 图表要求\n{chart_hint}"
+        )
     standards_hint = (bundle.get("standards_hint") or "").strip()
     if standards_hint:
-        if style == "plan":
-            extras.append(f"## 写作惯例提示（非标准条文原文）\n{standards_hint}")
-        else:
-            extras.append(
-                f"写作惯例提示：{standards_hint}"
-                if style == "qa"
-                else f"## 写作惯例提示（非标准条文原文）\n{standards_hint}"
-            )
+        extras.append(
+            f"写作惯例提示：{standards_hint}"
+            if style == "qa"
+            else f"## 写作惯例提示（非标准条文原文）\n{standards_hint}"
+        )
     ref_bid = (bundle.get("reference_bid_text") or "").strip()
     if ref_bid:
         snippet = truncate_reference_bid(ref_bid)
@@ -133,11 +129,10 @@ def format_generation_extras(bundle: dict, *, style: ExtrasStyle = "writer") -> 
         extras.append(blind_constraints)
     if not extras:
         return ""
-    if style == "plan":
-        return "\n\n".join(extras) + "\n\n"
+    parts = [part.strip() for part in extras if part.strip()]
     if style == "qa":
-        return "\n" + "\n".join(extras) + "\n"
-    return "\n\n".join(extras) + "\n\n"
+        return "\n" + "\n".join(parts) + "\n"
+    return "\n\n".join(parts) + "\n\n"
 
 
 def format_scope_constraints(
@@ -153,7 +148,7 @@ def format_scope_constraints(
     if style == "plan":
         return (
             f"- 同节兄弟：{format_title_list(sibling_titles, limit=limit)}\n"
-            f"- 全书其他叶子：{format_title_list(non_sibling or other_titles, limit=limit)}"
+            f"- 全书其他叶子：{format_title_list(non_sibling, limit=limit)}"
         )
     if style == "qa":
         hints: list[str] = []
@@ -165,13 +160,14 @@ def format_scope_constraints(
                 f"{format_title_list(non_sibling, limit=limit, empty='')}"
             )
         return "\n".join(hints)
+    chapter_title = (bundle.get("chapter_title") or "").strip() or "当前章节"
     scope_lines = [
-        f"- 仅撰写「{bundle['chapter_title']}」正文，不要输出 # 标题行",
+        f"- 仅撰写「{chapter_title}」正文，不要输出 # 标题行",
         "- 不得撰写其他叶子章节的内容，不得用其他章节标题作小节标题",
     ]
     if sibling_titles:
         scope_lines.append(f"- 同节兄弟章节（禁止涉及）：{'、'.join(sibling_titles)}")
-    other_hint = format_title_list(non_sibling or other_titles, limit=limit, empty="")
+    other_hint = format_title_list(non_sibling, limit=limit, empty="")
     if other_hint:
         scope_lines.append(f"- 全书其他叶子章节（禁止涉及）：{other_hint}")
     return "\n".join(scope_lines)

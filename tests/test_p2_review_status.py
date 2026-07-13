@@ -48,7 +48,7 @@ def test_build_qa_user_prompt_segment_label():
         },
         segment_label="中段",
     )
-    assert "抽检片段：中段" in prompt
+    assert "抽检片段标签：【中段】" in prompt
     assert "片段正文" in prompt
 
 

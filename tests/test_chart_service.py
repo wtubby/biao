@@ -147,3 +147,12 @@ def test_render_gantt_accepts_block_object_schema():
         assert path.stat().st_size > 0
     finally:
         path.unlink(missing_ok=True)
+
+
+def test_merge_gantt_payloads_dedupes_by_task_name():
+    from chart.chart_service import merge_gantt_payloads
+
+    a = [{"工序": "基础施工", "开始第几天": 1, "持续天数": 10}]
+    b = [{"name": "基础施工", "start": 0, "end": 10}, {"name": "架线", "start": 20, "end": 40}]
+    merged = merge_gantt_payloads([a, b])
+    assert [r["工序"] for r in merged] == ["基础施工", "架线"]

@@ -97,7 +97,18 @@ def test_heading_numbering_uses_emit_level_when_container_skipped():
         duration_days=90,
         extra_params=None,
     )
+    # 故意乱序传入，验证 assemble 内部 DFS 排序
     chapters = [
+        SimpleNamespace(
+            id="1.1.1",
+            parent_id="1.1",
+            title="基础施工",
+            level=3,
+            is_leaf=1,
+            generated_content="正文",
+            review_status="green",
+            sort_order=3,
+        ),
         SimpleNamespace(
             id="1",
             parent_id=None,
@@ -117,16 +128,6 @@ def test_heading_numbering_uses_emit_level_when_container_skipped():
             generated_content=None,
             review_status="green",
             sort_order=2,
-        ),
-        SimpleNamespace(
-            id="1.1.1",
-            parent_id="1.1",
-            title="基础施工",
-            level=3,
-            is_leaf=1,
-            generated_content="正文",
-            review_status="green",
-            sort_order=3,
         ),
     ]
 

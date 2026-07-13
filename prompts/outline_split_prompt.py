@@ -6,6 +6,13 @@ import json
 
 from prompts.outline_prompt import _LEAF_NODE_RULES
 
+# 拆分输出使用 guidance_brief（非 writing_guidance），与 OUTPUT FORMAT 及下游解析一致
+_SPLIT_LEAF_NODE_RULES = _LEAF_NODE_RULES.replace(
+    "- writing_guidance：",
+    "- guidance_brief：",
+    1,
+)
+
 SPLIT_SYSTEM_PROMPT = """## TASK
 你是工程投标技术方案大纲策划专家。你会收到**一个偏长的叶子章节**，需要在**不改变专业逻辑**的前提下，将其拆成 3~4 个**可独立生成**的三级/四级子节点。
 拆分依据必须是施工组织、工序、工作面、资源配置等业务结构，**禁止**仅按字数机械切分。
@@ -27,16 +34,22 @@ SPLIT_SYSTEM_PROMPT = """## TASK
 - 禁止把父节点全部评分项原样复制给每一个子节点
 
 ### 字段要求
-{_LEAF_NODE_RULES}
+{_SPLIT_LEAF_NODE_RULES}
+
+### 知识库绑定（bound_folder）
+- 每个子节点须单独输出 bound_folder
+- 默认沿用父节点 `<leaf_to_split>` 中的 bound_folder；若某子主题更贴近其他专有知识库可改选
+- 无匹配填 null
 
 ### 输出 id
 - 使用 id_suffix：\"1\"、\"2\"、\"3\"（系统将拼为「父节点 id + . + suffix」）
+- id_suffix 必须是纯数字字符串（如 \"1\"、\"2\"），禁止直接输出整型数字
 - 必须输出 3~4 个子节点
 
 ## OUTPUT FORMAT
 仅输出 JSON：
 {{"nodes": [
-  {{"id_suffix": "1", "title": "子节标题", "guidance_brief": "写作要点", "content_boundary": "边界说明", "requirement_ids": ["评分项id"]}},
+  {{"id_suffix": "1", "title": "子节标题", "guidance_brief": "写作要点", "content_boundary": "边界说明", "bound_folder": "知识库文件夹名或null", "requirement_ids": ["评分项id"]}},
   ...
 ]}}"""
 
@@ -52,7 +65,7 @@ def get_split_system_prompt(engineering_domain: str | None = None) -> str:
         "你是工程投标技术方案大纲策划专家。",
         expert if expert.endswith("。") else f"{expert}。",
         1,
-    ).format(_LEAF_NODE_RULES=_LEAF_NODE_RULES)
+    ).format(_SPLIT_LEAF_NODE_RULES=_SPLIT_LEAF_NODE_RULES)
 
 
 def build_split_user_prompt(
@@ -104,5 +117,6 @@ bound_folder：{bound}
 </同级兄弟章节>
 
 请输出 3~4 个子节点 JSON；为每个子节点分配相关的 requirement_ids（可为空列表）；
+为每个子节点指派 bound_folder（默认沿用上方 bound_folder）；
 子节点 content_boundary 须明确「写什么 / 不写什么 / 与前后子节点如何衔接」。
 仅输出 JSON。"""

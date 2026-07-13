@@ -163,6 +163,8 @@ def build_skeleton_user_prompt(global_info: dict, catalog: list[dict], reference
 {catalog_text}
 </catalog>
 
+一级标题约束：nodes 中 level=1 的 title 必须与 catalog 内【一级标题锁定清单】中的文本逐字一致，不得附加序号前缀（如「1.」）或 level 后缀（如「（level=1）」）。
+
 <行业参考结构（仅供参考，按实际项目取舍增删，不要照抄）>
 {reference_text}
 </行业参考结构>
@@ -192,8 +194,10 @@ BRANCH_SYSTEM_PROMPT = """## TASK
 - 若该分支确实没有匹配的评分项，requirement_ids 可为空列表，但仍需体现专业方案内容
 - requirement_ids 只能使用用户消息中列出的 ID，禁止编造
 - 同一评分项允许绑定多个叶子节点（不同分支各自需要时）
+- 你只看到当前分支，但 all_requirements 列出了全部评分项；若某评分项与当前分支内容勉强相关，且在大纲中无更合适的章节承载，请在本分支下建立对应子节予以覆盖，避免标书漏项
+- 优先绑定与本分支语义强相关的评分项；不要为了独占绑定而与其他分支争抢同一 requirement_id
 
-{_LEAF_NODE_RULES}
+%LEAF_RULES%
 
 ### 篇幅控制
 - 单个分支通常节点不多，无需为了省 token 压缩深度，按专业逻辑正常拆分即可
@@ -211,10 +215,13 @@ def get_branch_system_prompt(engineering_domain: str | None = None) -> str:
     expert = identity.replace("技术方案撰写专家", "投标技术方案大纲策划专家")
     if expert == identity:
         expert = f"{identity.rstrip('。')}；同时擅长技术方案大纲策划。"
-    return BRANCH_SYSTEM_PROMPT.replace(
-        "你是工程投标技术方案大纲策划专家。",
-        f"{expert}。",
-        1,
+    return (
+        BRANCH_SYSTEM_PROMPT.replace(
+            "你是工程投标技术方案大纲策划专家。",
+            f"{expert}。",
+            1,
+        )
+        .replace("%LEAF_RULES%", _LEAF_NODE_RULES)
     )
 
 
@@ -266,7 +273,8 @@ id={branch['id']}，标题「{branch['title']}」，parent_id={branch.get('paren
 1. 只判断和展开「{branch['title']}」这一个分支，不要输出其他分支内容
 2. 判断该分支是否需要向下拆分（见系统提示规则）
 3. 若拆分，新增子节点 id 以 "{branch['id']}." 为前缀
-4. 仅输出 JSON"""
+4. 若 all_requirements 中有评分项与当前分支勉强相关且无更合适的章节承载，请在本分支下建立子节覆盖，避免漏项
+5. 仅输出 JSON"""
 
 
 def _format_requirements(requirements: list[dict]) -> tuple[str, str]:
@@ -301,5 +309,11 @@ def _format_catalog(catalog: list[dict]) -> str:
         lines.append(f"{indent}{order}. {title}（level={level}）")
     header = ""
     if level1_titles:
-        header = "【一级标题锁定清单（不得改动）】\n" + "、".join(level1_titles) + "\n\n"
+        locked = "\n".join(f"  - {t}" for t in level1_titles)
+        header = (
+            "【一级标题锁定清单】\n"
+            "返回 JSON 时，一级节点的 title 必须与下列文本逐字一致，"
+            "不得附加序号前缀（如「1.」）或 level 后缀（如「（level=1）」）。\n"
+            f"{locked}\n\n"
+        )
     return header + "\n".join(lines)

@@ -2,23 +2,28 @@
 
 from __future__ import annotations
 
+from textwrap import dedent
 from typing import Literal
 
 from services.reference_bid_service import REFERENCE_BID_CHAPTER_LIMIT
 
 PriorStyle = Literal["writer", "plan", "qa"]
 
+_REFERENCE_BID_TRUNCATION_SUFFIX = "... [由于长度限制，系统已截断后续参考内容]"
+_REFERENCE_BID_MIN_TRUNCATION_SUFFIX = "..."
 
-def format_prior_chapters_block(bundle: dict, *, style: PriorStyle = "writer") -> str:
+
+def format_prior_chapters_block(
+    bundle: dict,
+    *,
+    style: PriorStyle = "writer",
+    max_summaries: int = 5,
+) -> str:
     """前序章节避让信息：有 prior_summaries 时不再重复展示 last_summary。"""
     prior = bundle.get("prior_summaries") or []
     has_sibling_body = bool((bundle.get("immediate_prior_sibling_body") or "").strip())
     if has_sibling_body and not prior:
         return ""
-    if has_sibling_body:
-        last = ""
-    else:
-        last = (bundle.get("last_summary") or "").strip()
 
     if prior:
         if style == "plan":
@@ -27,10 +32,11 @@ def format_prior_chapters_block(bundle: dict, *, style: PriorStyle = "writer") -
             header = "前序章节摘要（不得大段复述）：\n"
         else:
             header = "## 前序章节已写要点（禁止重复展开，仅可引用结论）\n"
-        lines = "\n".join(f"- {s}" for s in prior[:5])
+        lines = "\n".join(f"- {s}" for s in prior[:max_summaries])
         suffix = "\n" if style == "qa" else "\n\n"
         return header + lines + suffix
 
+    last = (bundle.get("last_summary") or "").strip()
     if last:
         if style == "plan":
             return (
@@ -66,17 +72,20 @@ def format_immediate_prior_sibling_block(bundle: dict, *, style: PriorStyle = "w
     if not title or not body:
         return ""
     chapter_title = (bundle.get("chapter_title") or "").strip()
-    return f"""## 已知前情（紧邻上一同级小节）
-上一小节「{title}」已生成正文如下（请直接承接，勿复读背景）：
-----
-{body}
-----
-## 当前连贯性要求
-- 撰写本节「{chapter_title}」正文，须承接上文具体术语与结论（如施工段划分、资源配置名称）
-- 严禁复读或重新引入上文已交代背景
-- 段首直接写技术内容，禁止「综上所述」「接下来我们将」等过渡套话
+    return dedent(
+        f"""\
+        ## 已知前情（紧邻上一同级小节）
+        上一小节「{title}」已生成正文如下（请直接承接，勿复读背景）：
+        ----
+        {body}
+        ----
+        ## 当前连贯性要求
+        - 撰写本节「{chapter_title}」正文，须承接上文具体术语与结论（如施工段划分、资源配置名称）
+        - 严禁复读或重新引入上文已交代背景
+        - 段首直接写技术内容，禁止「综上所述」「接下来我们将」等过渡套话
 
-"""
+        """
+    )
 
 
 def format_retrieval_notes(bundle: dict, *, inline: bool = True) -> str:
@@ -100,8 +109,15 @@ def format_retrieval_notes(bundle: dict, *, inline: bool = True) -> str:
 
 
 def truncate_reference_bid(text: str, *, limit: int = REFERENCE_BID_CHAPTER_LIMIT) -> str:
-    """以标写标片段注入上限（与 reference_bid_service 一致）。"""
+    """以标写标片段注入上限，超出部分附加显式截断提示。"""
     cleaned = (text or "").strip()
     if len(cleaned) <= limit:
         return cleaned
-    return cleaned[:limit]
+    suffix = _REFERENCE_BID_TRUNCATION_SUFFIX
+    actual_limit = limit - len(suffix)
+    if actual_limit <= 0:
+        min_suffix = _REFERENCE_BID_MIN_TRUNCATION_SUFFIX
+        if limit <= len(min_suffix):
+            return cleaned[:limit]
+        return cleaned[: limit - len(min_suffix)] + min_suffix
+    return cleaned[:actual_limit] + suffix

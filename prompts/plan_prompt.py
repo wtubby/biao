@@ -24,12 +24,14 @@ _PLAN_RULES = """在正式撰写章节之前，先制定一份详细的写作规
   "technical_methods": ["拟采用的主要工艺/方法"],
   "data_to_include": ["需要包含的关键技术数据/参数"],
   "charts_needed": [{"type": "GANTT_DATA", "purpose": "用途说明"}],
-  "word_count_target": 1200,
+  "word_count_target": 1000,
   "avoid": ["上一章已描述过的内容，本章不重复"],
   "retrieval_focus": ["用于二次检索的工艺/设备关键词"]
 }
 
-key_points 须覆盖本章每条评分项的「必备要素」（若有）及评分细则中的量化/管理要求；高分值项优先列入。"""
+word_count_target 须为整数，且与用户提示中「建议篇幅约 X 字」的 X 一致，勿套用示例数值。
+key_points 须覆盖本章每条评分项的「必备要素」（若有）及评分细则中的量化/管理要求；高分值项优先列入。
+请直接输出 JSON 字符串，不要包含任何 Markdown 代码块包裹（如 ```json）或前后导言。"""
 
 
 def get_plan_system_prompt(domain: str | None = None) -> str:
@@ -50,24 +52,24 @@ _OTHER_LEAF_PLAN_LIMIT = 40
 def build_plan_user_prompt(bundle: dict) -> str:
     guidance = bundle.get("guidance") or {}
     target_words = guidance.get("target_words") or 1000
+
     type_hint = ""
-    chapter_type = get_chapter_type(bundle.get("chapter_title"))
-    constraints = get_chapter_constraints(bundle.get("chapter_title"))
+    chapter_title = bundle.get("chapter_title")
+    chapter_type = get_chapter_type(chapter_title)
+    constraints = get_chapter_constraints(chapter_title)
     if constraints:
-        type_hint = f"\n\n{constraints}"
+        type_hint_list = [str(constraints).strip()]
         if chapter_type == "goal":
-            type_hint += (
-                "\n规划时 key_points 仅列目标承诺，technical_methods 留空或填「无」，"
+            type_hint_list.append(
+                "规划时 key_points 仅列目标承诺，technical_methods 留空或填「无」，"
                 "data_to_include 仅保留总工期、合同价等宏观数据，charts_needed 留空。"
             )
         elif chapter_type == "overview":
-            type_hint += (
-                "\n规划时 key_points 仅列项目客观信息与特点，technical_methods 留空或填「无」，"
+            type_hint_list.append(
+                "规划时 key_points 仅列项目客观信息与特点，technical_methods 留空或填「无」，"
                 "data_to_include 仅保留规模、电压等级、工期、地点等全局事实，charts_needed 留空。"
             )
-
-    sibling_titles = bundle.get("sibling_leaf_titles") or []
-    other_titles = bundle.get("other_leaf_titles") or []
+        type_hint = "\n" + "\n".join(type_hint_list)
 
     overview_block = format_overview_block(bundle.get("project_overview") or "", style="plan")
     facts_block = format_facts_block(bundle.get("global_facts_text") or "", style="plan")
@@ -82,24 +84,28 @@ def build_plan_user_prompt(bundle: dict) -> str:
     evaluation_focus = (bundle.get("evaluation_focus") or "").strip()
     focus_block = f"\n\n{evaluation_focus}\n" if evaluation_focus else ""
 
+    global_params = bundle.get("global_params") or {}
+    requirements_text = bundle.get("requirements_text") or "（无相关要求）"
+    retrieval_text = bundle.get("retrieval_text") or "（无检索素材）"
+    chapter_path = bundle.get("chapter_path") or "未知"
+
     return f"""## 全局工程信息
-{json.dumps(bundle['global_params'], ensure_ascii=False, indent=2)}
+{json.dumps(global_params, ensure_ascii=False, indent=2)}
 
 {overview_block}## 本章评分项
-{bundle['requirements_text']}{req_hint_block}{matrix_block}{focus_block}
+{requirements_text}{req_hint_block}{matrix_block}{focus_block}
 
 ## 检索素材
-{bundle['retrieval_text'] or '（无检索素材）'}
+{retrieval_text}
 {retrieval_notes}
 {facts_block}{prior_block}{contra_block}## 章节定位
-标题：{bundle['chapter_title']}
-路径：{bundle['chapter_path']}
+标题：{chapter_title}
+路径：{chapter_path}
 写作要点：{guidance.get('brief') or '无'}
 内容边界：{guidance.get('content_boundary') or '无'}
 建议篇幅约 {target_words} 字
 
 ## 范围约束（规划不得包含下列章节要点）
-{format_scope_constraints(bundle, style="plan", limit=_OTHER_LEAF_PLAN_LIMIT)}
-{type_hint}
+{format_scope_constraints(bundle, style="plan", limit=_OTHER_LEAF_PLAN_LIMIT)}{type_hint}
 
 {extras_block}请输出本章写作规划 JSON。"""

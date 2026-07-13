@@ -42,8 +42,10 @@ CHUNK_MAX_CHARS = 18000
 BLIND_BID_DETECT_WARNING = "检测到本项目可能为暗标，请确认「暗标」开关"
 
 EXTRACTION_TRUNCATION_HINT = (
-    "你上次返回的评分项 JSON 被截断。请只保留 source_text 的关键句（而非整段原文），"
-    "确保 requirements 数组完整输出，不要省略任何一条评分项。"
+    "你上次返回的 JSON 无效或被截断。请重新输出完整 JSON："
+    "1) 字符串内换行用 \\n、双引号用 \\\" 转义；"
+    "2) requirements 数组不得省略条目；"
+    "3) 长字段可精简 source_text 为关键句，但须保留评分项完整性。"
 )
 
 

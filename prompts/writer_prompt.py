@@ -11,27 +11,28 @@ from prompts.bundle_blocks import (
 )
 from prompts.context_blocks import (
     format_contradictions_block,
-    format_facts_block,
-    format_generation_extras,
     format_overview_block,
     format_scope_constraints,
 )
 from services.writing_guidance import get_chapter_constraints, is_descriptive_chapter
 
-_WRITER_RULES = """每次只撰写**一个叶子章节**的正文，不得穿插、预写或概括其他章节内容。
+_WRITER_RULES = """每次只撰写**一个叶子章节**的正文，严格聚焦于当前章节内容，不得穿插、预写或概括其他章节。
 
-输出 Markdown 正文，直接从正文段落开始，不要输出本章或其他章节的 # 标题行，不要前置客套话。
+【输出格式要求】
+1. 直接从正文第一段开始输出，**严禁输出任何 # 标题行**，严禁带有任何客套话或导言。
+2. 方案/措施类章节：必须包含具体施工步骤与可量化控制指标。关键参数必须采用 **[参数] 数值+单位** 格式。
+3. 需要插入图表处，请直接嵌入以下格式的单行 JSON 占位符（切勿单独换行）：
+   [GANTT_DATA: [{"工序": "基础施工", "开始第几天": 1, "持续天数": 10}]]
+   [TIMELINE_DATA: [...]] [FLOW_DATA: [...]] [ORG_DATA: {...}]
 
-禁止：宏观宣誓套话、与上一章摘要完全重复的工艺、无单位孤立数字、无检索依据的品牌型号、编造未在检索素材/全局事实中出现的规范标准号、为其他章节写小节标题或正文。
+【材料真实性底线】
+1. 坚决杜绝宏观宣誓套话。
+2. 凡涉及品牌、设备型号、具体的规范标准号（如 GB/T、DL/T），必须完全以本标书提供的「检索素材」或「全局事实」为准。若素材中未提及，则只做通用技术描述，**绝对不得凭空编造任何型号或标准号**！"""
 
-概况/特点/目标类章节：只写客观描述或目标承诺，不写施工方案与保证措施（以本章定位中的专项约束为准）。
-
-施工方案/措施类章节必须：具体施工步骤与可量化控制指标；关键参数用 **[参数] 数值+单位** 格式；需要图表处输出 JSON 占位符（冒号后紧跟 JSON，禁止写成 [GANTT_DATA] 单独一行再另起 JSON）：
-[GANTT_DATA: [{"工序": "基础施工", "开始第几天": 1, "持续天数": 10}]] [TIMELINE_DATA: [...]] [FLOW_DATA: [...]] [ORG_DATA: {...}] [SMART_DATA: [...]]"""
-
-_WRITER_RULES_COMPACT = """单章 Markdown 正文，无 # 标题行。禁止套话、无依据的品牌型号与标准号、跨章内容。
-方案类须有步骤与 **[参数] 数值+单位**；图表用 [GANTT_DATA]/[FLOW_DATA]/[ORG_DATA] 等 JSON 占位符。
-概况/目标类只写客观描述或承诺，不写措施。"""
+_WRITER_RULES_COMPACT = """单章 Markdown 正文，严禁输出 # 标题行。
+凡涉及标准号、品牌型号，必须有据可查，无依据时只做通用工艺描述，严禁凭空虚构。
+方案类须有量化步骤与 **[参数] 数值+单位**；图表使用 [GANTT_DATA]/[FLOW_DATA] 等单行 JSON 占位符。
+概况/目标类只写客观描述或承诺，不写具体对策措施。"""
 
 
 def _writer_identity(domain: str | None) -> str:
@@ -51,7 +52,6 @@ def load_domain_writing_guide(domain: str | None) -> str:
     """按工程领域加载写作指南。"""
     spec = resolve_domain(domain)
     if not spec.guide_file:
-        # 电力默认指南路径兼容：registry 中电力有 guide_file；无文件时再试 WRITING_GUIDE_PATH
         if spec.key == DEFAULT_DOMAIN:
             return load_writing_guide()
         return ""
@@ -122,6 +122,13 @@ _OTHER_LEAF_PROMPT_LIMIT = 40
 
 
 def build_writer_user_prompt(bundle: dict) -> str:
+    global_params = bundle.get("global_params") or {}
+    requirements_text = bundle.get("requirements_text") or "（无相关评分项要求）"
+    retrieval_text = bundle.get("retrieval_text") or "（无检索素材）"
+    chapter_title = bundle.get("chapter_title") or "未命名章节"
+    chapter_level = bundle.get("chapter_level") or "未知"
+    chapter_path = bundle.get("chapter_path") or "未知路径"
+
     guidance = bundle.get("guidance") or {}
     brief = guidance.get("brief") or "无"
     boundary = guidance.get("content_boundary") or "无"
@@ -133,6 +140,7 @@ def build_writer_user_prompt(bundle: dict) -> str:
     empty_retrieval_block = format_retrieval_notes(bundle)
     sibling_block = format_immediate_prior_sibling_block(bundle, style="writer")
     prior_block = format_prior_chapters_block(bundle, style="writer")
+
     req_hint = (bundle.get("requirements_hint") or "").strip()
     req_hint_block = f"\n\n{req_hint}" if req_hint else ""
     matrix_context = (bundle.get("matrix_context") or "").strip()
@@ -142,18 +150,18 @@ def build_writer_user_prompt(bundle: dict) -> str:
     contra_block = format_contradictions_block(bundle.get("contradictions") or [], style="writer")
 
     base = f"""## 全局工程信息
-{json.dumps(bundle['global_params'], ensure_ascii=False, indent=2)}
+{json.dumps(global_params, ensure_ascii=False, indent=2)}
 
 {overview_block}## 本章评分项
-{bundle['requirements_text']}{req_hint_block}{matrix_block}{focus_block}
+{requirements_text}{req_hint_block}{matrix_block}{focus_block}
 
 ## 检索素材
-{bundle['retrieval_text'] or '（无检索素材）'}
+{retrieval_text}
 {empty_retrieval_block}
 {sibling_block}{prior_block}{contra_block}## 章节定位
-标题：{bundle['chapter_title']}
-层级：第 {bundle['chapter_level']} 级
-路径：{bundle['chapter_path']}
+标题：{chapter_title}
+层级：第 {chapter_level} 级
+路径：{chapter_path}
 写作要点：{brief}
 内容边界：{boundary}
 篇幅要求：{word_hint}
@@ -163,31 +171,48 @@ def build_writer_user_prompt(bundle: dict) -> str:
 
     facts_text = (bundle.get("global_facts_text") or "").strip()
     if facts_text:
-        base += f"""
-
-【全局事实变量（全书保持一致，涉及时必须使用以下信息，不得自行编造）】
-{facts_text}"""
+        base += f"\n\n【全局事实变量（全书保持一致，涉及时必须使用以下信息，不得自行编造）】\n{facts_text}"
 
     plan = bundle.get("content_plan")
-    if plan:
+    if plan and isinstance(plan, dict):
+        kp_list = plan.get("key_points") or []
+        tm_list = plan.get("technical_methods") or []
+        di_list = plan.get("data_to_include") or []
+        ch_list = plan.get("charts_needed") or []
+        av_list = plan.get("avoid") or []
+
+        kp_str = "\n".join(f"- {p}" for p in kp_list) if kp_list else "- 无"
+        tm_str = "\n".join(f"- {m}" for m in tm_list) if tm_list else "- 无"
+        di_str = "\n".join(f"- {d}" for d in di_list) if di_list else "- 无"
+        ch_str = (
+            "\n".join(
+                f"- [{c.get('type', '')}] {c.get('purpose', '')}"
+                for c in ch_list
+                if isinstance(c, dict)
+            )
+            if ch_list
+            else "- 无"
+        )
+        av_str = "; ".join(av_list) if av_list else "无"
+
         base += f"""
 
 【本章写作规划（请严格按规划撰写，不得遗漏关键要点）】
 必须覆盖的要点：
-{chr(10).join('- ' + p for p in plan.get('key_points', []))}
+{kp_str}
 
 拟采用的技术方法：
-{chr(10).join('- ' + m for m in plan.get('technical_methods', []))}
+{tm_str}
 
 需包含的关键数据：
-{chr(10).join('- ' + d for d in plan.get('data_to_include', []))}
+{di_str}
 
 建议插入的图表：
-{chr(10).join('- [' + c.get('type', '') + '] ' + c.get('purpose', '') for c in plan.get('charts_needed', []))}
+{ch_str}
 
 本章目标字数：约 {plan.get('word_count_target', 1000)} 字
 
-【不要重复上章内容】：{'; '.join(plan.get('avoid', []))}"""
+【不要重复上章内容】：{av_str}"""
 
     if bundle.get("_segment_mode"):
         seg_i = bundle.get("_segment_index") or 1
@@ -202,7 +227,7 @@ def build_writer_user_prompt(bundle: dict) -> str:
 - 已写要点（勿重复）：{'；'.join(written) if written else '（无）'}
 - 后续段将写（本段勿抢写）：{'；'.join(remaining) if remaining else '（本段为最后一段）'}"""
 
-    chapter_constraints = get_chapter_constraints(bundle.get("chapter_title"))
+    chapter_constraints = get_chapter_constraints(chapter_title)
     if chapter_constraints:
         base += f"\n\n{chapter_constraints}"
 
@@ -220,10 +245,10 @@ def build_writer_user_prompt(bundle: dict) -> str:
 
     ref_bid = (bundle.get("reference_bid_text") or "").strip()
     if ref_bid:
-        base += f"""
-
-## 以标写标参考（仅结构与表述风格参考；禁止逐句照抄；与本章无关内容忽略）
-{ref_bid}"""
+        base += (
+            "\n\n## 以标写标参考（仅结构与表述风格参考；禁止逐句照抄；与本章无关内容忽略）\n"
+            f"{ref_bid}"
+        )
     elif bundle.get("reference_bid_miss"):
         base += (
             "\n\n## 以标写标说明\n"
@@ -249,26 +274,25 @@ def build_key_chapter_init_prompt(
     project, requirements: list, outline_titles: list[str], domain: str | None = None,
     overview: str | None = None,
 ) -> str:
-    from domains.registry import DEFAULT_DOMAIN, resolve_domain
-
     spec = resolve_domain(domain)
     domain_label = spec.label
-    req_lines = "\n".join(f"- {r.requirement_title}" for r in requirements)
-    titles = "\n".join(f"- {t}" for t in outline_titles)
-    voltage_line = (
-        f"电压等级：{project.voltage_level or '未填'}\n"
-        if spec.key == DEFAULT_DOMAIN
-        else ""
-    )
+    req_lines = "\n".join(f"- {r.requirement_title}" for r in requirements) if requirements else "（无）"
+    titles = "\n".join(f"- {t}" for t in outline_titles) if outline_titles else "（无）"
+
+    voltage_line = ""
+    if spec.key == DEFAULT_DOMAIN:
+        voltage_line = f"电压等级：{getattr(project, 'voltage_level', '未填')}\n"
+
     overview_block = ""
     if (overview or "").strip():
         overview_block = f"\n项目概况：\n{overview.strip()}\n"
+
     return f"""请记住以下{domain_label}技术标项目背景，后续将逐章请你撰写正文。
 
-工程名称：{project.name}
-{voltage_line}工程规模：{project.capacity or '未填'}
-总工期：{project.duration_days or '未填'} 日历天
-建设地点：{project.location or '未填'}
+工程名称：{getattr(project, 'name', '未填')}
+{voltage_line}工程规模：{getattr(project, 'capacity', '未填')}
+总工期：{getattr(project, 'duration_days', '未填')} 日历天
+建设地点：{getattr(project, 'location', '未填')}
 {overview_block}
 评分项：
 {req_lines}
