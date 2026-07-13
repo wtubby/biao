@@ -102,3 +102,26 @@ def test_review_chapter_content_keeps_yellow_when_hard_qa_fails():
         assert any("模板残留" in e or "TODO" in e for e in errors)
     finally:
         db.close()
+
+
+def test_review_chapter_content_normalizes_paste_spacing():
+    """重新验章前清洗全角/连续空格，并写回正文，避免粘贴排版残留硬拦。"""
+    init_db()
+    db = SessionLocal()
+    try:
+        content = (
+            "　　本工程施工组织设计针对220kV变电站新建工程，总工期180日历天。"
+            "施工组织方案包括人员配置12人、机械投入3台、关键工序质量控制点15处。"
+            "完全响应招标文件施工组织设计要求。"
+        )
+        project, chapter = _seed_chapter(db, content)
+        with patch("services.chapter_qa_orchestrator.run_soft_qa", return_value={"passed": True}), patch(
+            "services.chapter_qa_orchestrator.generate_summary", return_value="摘要"
+        ):
+            result = review_chapter_content(db, project, chapter, refresh_summary=False)
+        assert "\u3000" not in (result.generated_content or "")
+        assert "  " not in (result.generated_content or "")
+        assert result.review_status == "green"
+        assert result.review_errors is None
+    finally:
+        db.close()

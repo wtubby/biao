@@ -1,6 +1,7 @@
 """质检规则单元测试。"""
 
 from services.qa_rules import (
+    check_ai_spacing,
     check_chapter_scope,
     check_chart_renderability,
     check_descriptive_chapter_measures,
@@ -114,12 +115,53 @@ def test_trim_out_of_scope_content_truncates_at_other_heading():
     assert "越界" not in trimmed
 
 
+def test_trim_out_of_scope_content_truncates_at_numbered_heading():
+    """编号式标题（无 #）也应截断，与 check_chapter_scope 标准一致。"""
+    content = "主变就位工序说明。\n3.3 电缆敷设方案\n越界内容不应保留"
+    trimmed = trim_out_of_scope_content(content, "主变安装", ["电缆敷设", "GIS安装"])
+    assert "主变就位" in trimmed
+    assert "越界" not in trimmed
+    assert "3.3" not in trimmed
+    # 截断后不应再被 scope 硬错误命中
+    assert not check_chapter_scope(trimmed, "主变安装", ["电缆敷设", "GIS安装"])
+
+
 def test_check_truncation_risk_detects_dangling_comma():
     assert check_truncation_risk("本章施工方案包括基础开挖、设备就位、")
 
 
 def test_check_truncation_risk_passes_normal_ending():
     assert not check_truncation_risk("本章施工方案包括基础开挖、设备就位等工序。")
+
+
+def test_check_truncation_risk_passes_markdown_table_ending():
+    """正文以 Markdown 表格行收尾不应误判为截断。"""
+    table = (
+        "| 工序 | 时间 | 负责人 |\n"
+        "| --- | --- | --- |\n"
+        "| 基础开挖 | 6-10日 | 张三 |\n"
+        "| 主体施工 | 6-20日 | 李四 |"
+    )
+    assert not check_truncation_risk(table)
+    padded = ("本章进度安排说明。" * 20) + "\n\n" + table
+    assert len(padded) > 200
+    assert not check_truncation_risk(padded)
+
+
+def test_check_ai_spacing_ignores_aligned_markdown_table():
+    """表格列宽对齐空格不应触发连续半角空格硬错误。"""
+    sample = (
+        "进度安排如下。\n\n"
+        "| 工序     | 起止时间 | 负责人 |\n"
+        "|----------|----------|--------|\n"
+        "| 基础开挖 | 1-5日    | 张三   |\n"
+        "| 主体施工 | 6-20日   | 李四   |\n"
+    )
+    assert "存在连续多个半角空格" not in check_ai_spacing(sample)
+
+
+def test_check_ai_spacing_flags_body_double_spaces():
+    assert "存在连续多个半角空格" in check_ai_spacing("本工程  采用专项方案。")
 
 
 def test_check_chart_renderability_flags_missing_graphviz(monkeypatch):

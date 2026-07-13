@@ -36,7 +36,7 @@ from services.chapter_version_service import archive_chapter_snapshot
 from services.generation_config import get_generation_config
 from services.humanizer_service import humanize_content
 from services.prompt_debug_service import capture_generation_prompt_debug
-from services.qa_rules import trim_out_of_scope_content
+from services.qa_rules import normalize_ai_spacing, trim_out_of_scope_content
 from services.chapter_review_errors import dump_review_errors
 
 logger = logging.getLogger(__name__)
@@ -183,6 +183,9 @@ def review_chapter_content(
         db.commit()
         db.refresh(chapter)
         return chapter
+
+    # 与生成链路一致：先清全角/连续空格，避免粘贴排版残留卡死验章
+    content = normalize_ai_spacing(content)
 
     bundle = build_context_bundle(db, project, chapter)
     plan = None

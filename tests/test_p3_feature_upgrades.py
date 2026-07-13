@@ -44,6 +44,19 @@ def test_blind_bid_violations_detect_company():
     assert any("暗标违规" in e for e in errors)
 
 
+def test_blind_bid_violations_allows_generic_power_company():
+    """「电力公司」等行业通用词不应单独判为暗标身份泄露。"""
+    errors = check_blind_bid_violations(
+        "本工程建成后按规定移交属地电力公司统一调度运行。"
+    )
+    assert not any("电力公司" in e for e in errors)
+
+
+def test_blind_bid_violations_detects_self_reference():
+    errors = check_blind_bid_violations("我公司承诺按期完工。")
+    assert any("我公司" in e for e in errors)
+
+
 def test_is_blind_bid_reads_tender_detail():
     project = Project(id="p-blind", name="测", status="confirming", extra_params="{}")
     detail = empty_tender_detail()

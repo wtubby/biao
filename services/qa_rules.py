@@ -313,19 +313,26 @@ _HEADING_LINE_RE = re.compile(
 )
 
 
+def _line_as_heading(stripped: str) -> str | None:
+    """若该行是标题则返回标题文本，否则 None（与 check_chapter_scope 同一标准）。"""
+    if stripped.startswith("#"):
+        return stripped.lstrip("#").strip() or None
+    if (
+        stripped
+        and len(stripped) < 60
+        and not stripped.endswith(("。", "；", ";", "！", "!"))
+        and _HEADING_LINE_RE.match(stripped)
+    ):
+        return stripped
+    return None
+
+
 def _collect_headings(text: str) -> list[str]:
     headings: list[str] = []
     for line in text.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("#"):
-            headings.append(stripped.lstrip("#").strip())
-        elif (
-            stripped
-            and len(stripped) < 60
-            and not stripped.endswith(("。", "；", ";", "！", "!"))
-            and _HEADING_LINE_RE.match(stripped)
-        ):
-            headings.append(stripped)
+        heading = _line_as_heading(line.strip())
+        if heading:
+            headings.append(heading)
     return headings
 
 
@@ -368,13 +375,11 @@ def trim_out_of_scope_content(
         return content
     kept: list[str] = []
     for line in content.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("#"):
-            heading = stripped.lstrip("#").strip()
-            if not _title_scope_match(heading, chapter_title):
-                for other in other_leaf_titles:
-                    if _title_scope_match(heading, other):
-                        return "\n".join(kept).rstrip()
+        heading = _line_as_heading(line.strip())
+        if heading and not _title_scope_match(heading, chapter_title):
+            for other in other_leaf_titles:
+                if _title_scope_match(heading, other):
+                    return "\n".join(kept).rstrip()
         kept.append(line)
     return content
 
@@ -431,6 +436,7 @@ def check_stitch_cheat(text: str, keywords: list[str], *, window: int = 30, min_
 
 
 _SENTENCE_END_CHARS = ("。", "！", "？", "]]", "}]", "）", ")")
+_TABLE_ROW_RE = re.compile(r"^\|.*\|$")
 
 
 def check_truncation_risk(content: str) -> list[str]:
@@ -439,6 +445,10 @@ def check_truncation_risk(content: str) -> list[str]:
     if not text:
         return []
     if text.endswith(_SENTENCE_END_CHARS):
+        return []
+    # 以合法 Markdown 表格行收尾是正常结束，不算截断
+    last_line = text.rsplit("\n", 1)[-1].strip()
+    if _TABLE_ROW_RE.match(last_line):
         return []
     if text.endswith(("，", "、", "：", "；", "-", "—")):
         return ["正文结尾疑似被截断（以逗号/顿号等非结束标点收尾）"]
@@ -474,12 +484,17 @@ def check_ai_spacing(text: str) -> list[str]:
     errors: list[str] = []
     if "\u3000" in text:
         errors.append("存在全角空格（应使用半角或删除）")
-    if re.search(r"  +", text):
+    # Markdown 表格行常含列宽对齐空格，排除后再查连续半角空格
+    non_table = "\n".join(
+        line
+        for line in (text or "").splitlines()
+        if not _TABLE_ROW_RE.match(line.strip())
+    )
+    if re.search(r"  +", non_table):
         errors.append("存在连续多个半角空格")
     return errors
 
 
-_TABLE_ROW_RE = re.compile(r"^\|.*\|$")
 _TABLE_SEP_RE = re.compile(r"^\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?$")
 _OPENING_PREFIX_RE = re.compile(
     r"^([针对为按照根据结合通过采用将本工程本项目本章本节本文][^，,。；;：:\n]{0,6})[，,：:；;]"
@@ -832,6 +847,15 @@ _FACT_KV_RE = re.compile(
     r"([^\n；;。]{1,40})"
 )
 _COUNT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(台|套|基|回|km|公里|米|m|天|日|人)")
+# 2~3 字行政名 + 省/市/县/区，避免「类似规模的上海市」这类带前缀垃圾片段
+_PLACE_NAME_RE = re.compile(r"([\u4e00-\u9fff]{2,3}(?:省|市|县|区))")
+# 明确断言本工程地点的句式；不含「参考XX市」类比
+_LOCATION_CLAIM_RE = re.compile(
+    r"(?:建设地点|施工地点|工程地点|工程位于|项目位于|本工程位于|本项目位于|"
+    r"本工程(?:建设)?地址|项目地址|工程地址|坐落于)"
+    r"(?:[：:\s]|为|是)+"
+    r"([^。；;，,\n]{2,40})"
+)
 
 
 def extract_fact_kv_pairs(facts_text: str) -> list[tuple[str, str]]:
@@ -843,6 +867,15 @@ def extract_fact_kv_pairs(facts_text: str) -> list[tuple[str, str]]:
         if key and val and len(val) <= 40:
             pairs.append((key, val))
     return pairs[:30]
+
+
+def _location_parts(location: str) -> list[str]:
+    """拆出建设地点中的省/市/县/区片段，便于子串兼容。"""
+    parts = _PLACE_NAME_RE.findall(location or "")
+    loc = (location or "").strip()
+    if loc and loc not in parts:
+        parts.append(loc)
+    return parts
 
 
 def check_global_fact_consistency(
@@ -860,14 +893,22 @@ def check_global_fact_consistency(
 
     location = str(params.get("建设地点") or "").strip()
     if location and len(location) >= 2:
-        # 正文出现其他「省/市」地名且不含建设地点时提示（宽松）
-        other_locs = re.findall(r"[\u4e00-\u9fff]{2,8}(?:省|市|县|区)", text)
-        if other_locs and location not in text:
-            foreign = [x for x in other_locs if x not in location and location not in x]
+        loc_parts = _location_parts(location)
+        for m in _LOCATION_CLAIM_RE.finditer(text):
+            claim = m.group(1).strip()
+            # 声明里已覆盖全局建设地点（含「成都市」对「四川省成都市」）则放过
+            if any(p and p in claim for p in loc_parts):
+                continue
+            places = _PLACE_NAME_RE.findall(claim)
+            foreign = [
+                p for p in places
+                if not any(p in lp or lp in p for lp in loc_parts if lp)
+            ]
             if foreign:
                 errors.append(
                     f"建设地点疑似不一致：全局为「{location}」，正文出现「{foreign[0]}」"
                 )
+                break
 
     voltage = str(params.get("电压等级") or "").strip()
     if voltage:
@@ -947,32 +988,56 @@ _STITCH_BAD_OPENERS = (
     "如上所述",
     "继续上文",
     "下面继续",
-    "首先，",
 )
 
+_STITCH_NGRAM_N = 8
+_STITCH_OVERLAP_RATIO = 0.18
 
-def check_segment_stitch_quality(parts: list[str]) -> list[str]:
-    """长章分段拼接质量：段首套话、相邻段重叠。"""
-    cleaned = [p.strip() for p in parts if (p or "").strip()]
-    if len(cleaned) < 2:
+
+def _chinese_ngrams(text: str, n: int = _STITCH_NGRAM_N) -> set[str]:
+    """滑动窗口中文 n-gram；相位无关，能检出偏移后的整句重复。"""
+    chars = "".join(re.findall(r"[\u4e00-\u9fff]", text or ""))
+    if len(chars) < n:
+        return set()
+    return {chars[i : i + n] for i in range(len(chars) - n + 1)}
+
+
+def check_segment_stitch_quality(parts: list[str]) -> list[dict]:
+    """长章分段拼接质量：段首套话、相邻段重叠。
+
+    返回 [{"index": int, "message": str}, ...]，index 为需重写段的 0-based 下标
+    （接缝问题一律修后一段：去掉段首套话/对上段的复述）。
+    """
+    indexed = [(i, (p or "").strip()) for i, p in enumerate(parts) if (p or "").strip()]
+    if len(indexed) < 2:
         return []
-    errors: list[str] = []
-    for i, part in enumerate(cleaned[1:], start=2):
+    errors: list[dict] = []
+    for j in range(1, len(indexed)):
+        prev_i, prev = indexed[j - 1]
+        curr_i, part = indexed[j]
+        seg_no = curr_i + 1
         head = part[:80]
         for opener in _STITCH_BAD_OPENERS:
             if head.startswith(opener) or opener in head[:40]:
-                errors.append(f"第 {i} 段段首出现过渡套话「{opener}」，请直接写技术内容")
+                errors.append({
+                    "index": curr_i,
+                    "message": f"第 {seg_no} 段段首出现过渡套话「{opener}」，请直接写技术内容",
+                })
                 break
-        prev_tail = cleaned[i - 2][-220:]
+        prev_tail = prev[-220:]
         curr_head = part[:220]
-        prev_grams = set(re.findall(r"[\u4e00-\u9fff]{6,12}", prev_tail))
-        curr_grams = set(re.findall(r"[\u4e00-\u9fff]{6,12}", curr_head))
+        prev_grams = _chinese_ngrams(prev_tail)
+        curr_grams = _chinese_ngrams(curr_head)
         if prev_grams and curr_grams:
             overlap = len(prev_grams & curr_grams) / max(len(curr_grams), 1)
-            if overlap >= 0.35:
-                errors.append(
-                    f"第 {i - 1}/{i} 段接缝重复偏高，请去掉段首对上段内容的复述"
-                )
+            if overlap >= _STITCH_OVERLAP_RATIO:
+                errors.append({
+                    "index": curr_i,
+                    "message": (
+                        f"第 {prev_i + 1}/{seg_no} 段接缝重复偏高，"
+                        "请去掉段首对上段内容的复述"
+                    ),
+                })
     return errors[:5]
 
 

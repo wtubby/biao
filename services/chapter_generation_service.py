@@ -237,7 +237,15 @@ def _generate_segmented_chapter(
                 seg_plan["data_to_include"] = data_items[:mid_d]
 
         seg_bundle = dict(bundle)
+        # 与 seg_plan.word_count_target 对齐，避免 prompt 里「篇幅要求」与「本章目标字数」矛盾
+        seg_bundle["guidance"] = {
+            **(bundle.get("guidance") or {}),
+            "target_words": per_group_words,
+        }
         seg_bundle["content_plan"] = seg_plan
+        # 非首段去掉整章图表密度提示，避免每段都插 1~2 处导致堆砌
+        if idx > 0:
+            seg_bundle["chart_density_hint"] = ""
         seg_bundle["_segment_mode"] = True
         seg_bundle["_segment_index"] = idx + 1
         seg_bundle["_segment_total"] = len(groups)
@@ -245,14 +253,10 @@ def _generate_segmented_chapter(
         seg_bundle["_segment_remaining"] = remaining
 
         user_prompt = build_writer_user_prompt(seg_bundle)
-        if fix_instructions and idx == 0:
+        # QA 重试时每段都带完整修复清单，避免非首段“盲修”
+        if fix_instructions:
             user_prompt += (
                 f"\n\n## 修改要求（整章修复，各段均需落实）\n{fix_instructions}"
-            )
-        elif fix_instructions:
-            user_prompt += (
-                "\n\n## 修改要求\n请在本段落实与本段要点相关的修复项；"
-                "段首直接写技术内容，勿写「接上文/综上所述」。"
             )
         content, messages = _generate_once(
             seg_bundle,
@@ -266,39 +270,62 @@ def _generate_segmented_chapter(
             parts.append(part)
             written.extend(group)
 
-    stitch_errors = check_segment_stitch_quality(parts)
-    if stitch_errors and len(parts) >= 2:
-        # 轻量重写最后一段段首，降低接缝套话/复读
-        last_idx = len(parts) - 1
-        fix_seg = (
-            "修复段首问题：\n"
-            + "\n".join(stitch_errors)
-            + "\n直接输出本段正文，不要过渡套话。"
-        )
-        seg_bundle = dict(bundle)
-        seg_bundle["content_plan"] = {
-            **plan,
-            "key_points": groups[last_idx],
-            "avoid": list(dict.fromkeys(list(plan.get("avoid") or []) + written[: last_idx + 1])),
-            "charts_needed": [],
-            "technical_methods": [],
-            "data_to_include": [],
-        }
-        seg_bundle["_segment_mode"] = True
-        seg_bundle["_segment_index"] = last_idx + 1
-        seg_bundle["_segment_total"] = len(groups)
-        seg_bundle["_segment_written"] = written[:last_idx]
-        seg_bundle["_segment_remaining"] = []
-        user_prompt = build_writer_user_prompt(seg_bundle) + f"\n\n## 修改要求\n{fix_seg}"
-        rewritten, messages = _generate_once(
-            seg_bundle,
-            user_prompt,
-            max_tokens=per_tokens,
-            chat_messages=messages,
-            use_chat=use_chat,
-        )
-        if (rewritten or "").strip():
-            parts[last_idx] = rewritten.strip()
+    stitch_issues = check_segment_stitch_quality(parts)
+    if stitch_issues and len(parts) >= 2:
+        # 按检出的段落下标重写对应段（可能是中间段，也可能多段）
+        by_idx: dict[int, list[str]] = {}
+        for issue in stitch_issues:
+            idx = int(issue.get("index", -1))
+            msg = str(issue.get("message") or "").strip()
+            if idx < 0 or not msg:
+                continue
+            by_idx.setdefault(idx, []).append(msg)
+
+        for fix_idx in sorted(by_idx.keys()):
+            if fix_idx <= 0 or fix_idx >= len(parts) or fix_idx >= len(groups):
+                continue
+            fix_seg = (
+                "修复段首问题：\n"
+                + "\n".join(by_idx[fix_idx])
+                + "\n直接输出本段正文，不要过渡套话。"
+            )
+            prior_points = [p for g in groups[:fix_idx] for p in g]
+            remaining = [p for g in groups[fix_idx + 1:] for p in g]
+            seg_bundle = dict(bundle)
+            seg_bundle["guidance"] = {
+                **(bundle.get("guidance") or {}),
+                "target_words": per_group_words,
+            }
+            seg_bundle["content_plan"] = {
+                **plan,
+                "key_points": groups[fix_idx],
+                "word_count_target": per_group_words,
+                "avoid": list(dict.fromkeys(
+                    list(plan.get("avoid") or []) + prior_points
+                )),
+                "charts_needed": [],
+                "technical_methods": [],
+                "data_to_include": [],
+            }
+            # 非首段不带整章图表密度提示
+            seg_bundle["chart_density_hint"] = ""
+            seg_bundle["_segment_mode"] = True
+            seg_bundle["_segment_index"] = fix_idx + 1
+            seg_bundle["_segment_total"] = len(groups)
+            seg_bundle["_segment_written"] = prior_points
+            seg_bundle["_segment_remaining"] = remaining
+            user_prompt = (
+                build_writer_user_prompt(seg_bundle) + f"\n\n## 修改要求\n{fix_seg}"
+            )
+            rewritten, messages = _generate_once(
+                seg_bundle,
+                user_prompt,
+                max_tokens=per_tokens,
+                chat_messages=messages,
+                use_chat=use_chat,
+            )
+            if (rewritten or "").strip():
+                parts[fix_idx] = rewritten.strip()
 
     return "\n\n".join(parts), messages if use_chat else chat_messages
 

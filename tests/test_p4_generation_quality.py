@@ -77,6 +77,40 @@ def test_global_fact_consistency_count_conflict():
     assert any("主变台数" in e for e in errors)
 
 
+def test_global_fact_consistency_ignores_reference_city():
+    """引用其他省市同类工程经验不应报建设地点不一致。"""
+    content = (
+        "本工程施工组织参考了类似电压等级、类似规模的上海市某变电站工程经验，"
+        "结合本工程实际编制专项方案。"
+    )
+    errors = check_global_fact_consistency(
+        content,
+        global_params={"建设地点": "四川省成都市"},
+    )
+    assert not any("建设地点" in e for e in errors)
+
+
+def test_global_fact_consistency_flags_explicit_location_claim():
+    """明确声明建设地点与全局不符时应检出，且片段为干净地名。"""
+    content = "本工程建设地点为上海市浦东新区，电压等级220kV。"
+    errors = check_global_fact_consistency(
+        content,
+        global_params={"建设地点": "四川省成都市"},
+    )
+    assert any("建设地点疑似不一致" in e for e in errors)
+    assert any("上海市" in e for e in errors)
+    assert not any("类似规模" in e for e in errors)
+
+
+def test_global_fact_consistency_allows_matching_city_claim():
+    content = "本工程建设地点为成都市高新区，总工期180天。"
+    errors = check_global_fact_consistency(
+        content,
+        global_params={"建设地点": "四川省成都市"},
+    )
+    assert not any("建设地点" in e for e in errors)
+
+
 def test_cross_chapter_overlap_detects_reuse():
     prior = (
         "采用双机抬吊完成主变就位，吊装前复核基础轴线与标高，"
@@ -91,7 +125,37 @@ def test_segment_stitch_quality_flags_opener_and_overlap():
     p1 = "首段写吊装工艺与参数控制，设置警戒区并安排专人指挥。" * 3
     p2 = "综上所述，继续上文吊装工艺与参数控制，设置警戒区并安排专人指挥。" + ("补充调试。" * 5)
     errors = check_segment_stitch_quality([p1, p2])
-    assert any("套话" in e or "接缝" in e for e in errors)
+    assert errors
+    assert all(isinstance(e, dict) and "index" in e and "message" in e for e in errors)
+    assert all(e["index"] == 1 for e in errors)
+    assert any("套话" in e["message"] or "接缝" in e["message"] for e in errors)
+
+
+def test_segment_stitch_quality_indexes_middle_segment():
+    """中间段接缝问题应标到该段下标，而不是末段。"""
+    p1 = "首段写吊装工艺与参数控制，设置警戒区并安排专人指挥。" * 3
+    p2 = "综上所述，继续上文吊装工艺与参数控制，设置警戒区并安排专人指挥。" + ("补充调试。" * 5)
+    p3 = "末段写受电条件确认与试运行安排，明确责任分工。" * 3
+    errors = check_segment_stitch_quality([p1, p2, p3])
+    assert errors
+    assert all(e["index"] == 1 for e in errors)
+    assert not any(e["index"] == 2 for e in errors)
+
+
+def test_segment_stitch_quality_detects_phase_shifted_sentence_dup():
+    """整句重复但起始偏移不同时，滑动 n-gram 仍应检出（旧贪婪切块会漏检）。"""
+    dup = "本工程严格按照国家现行施工验收规范执行质量控制流程确保工程质量和进度符合合同要求"
+    p1 = "前文垫字若干。" + dup + "。后文继续讲吊装工艺与参数控制设置警戒区。"
+    p2 = "别的前缀。" + dup + "。然后本段继续讲调试方案与受电条件确认责任分工。"
+    errors = check_segment_stitch_quality([p1, p2])
+    assert any(e["index"] == 1 and "接缝" in e["message"] for e in errors)
+
+
+def test_segment_stitch_quality_ignores_unrelated_segments():
+    p1 = "首段写吊装工艺与参数控制，设置警戒区并安排专人指挥。" * 4
+    p2 = "末段写受电条件确认与试运行安排，明确责任分工与验收标准。" * 4
+    errors = check_segment_stitch_quality([p1, p2])
+    assert not any("接缝" in e["message"] for e in errors)
 
 
 def test_atomic_markdown_closure_flags_incomplete_table_and_chart():

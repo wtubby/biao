@@ -126,6 +126,57 @@ def test_matrix_issues_for_chapter_missing_keyword():
         db.close()
 
 
+def test_matrix_issues_for_chapter_combines_sibling_coverage():
+    """同一评分项绑定多章时，按合并正文判覆盖，单章缺项不应误报。"""
+    init_db()
+    db = SessionLocal()
+    try:
+        pid = str(uuid.uuid4())
+        project = Project(id=pid, name="矩阵多章", status="done")
+        db.add(project)
+        req = TechRequirement(
+            id=str(uuid.uuid4()),
+            project_id=pid,
+            requirement_title="安全文明施工",
+            keyword="安全,文明",
+            mandatory_elements="安全措施,文明施工",
+            is_risk_item=1,
+            status="confirmed",
+        )
+        db.add(req)
+        rid = json.dumps([req.id])
+        ch_a = TechOutline(
+            id=str(uuid.uuid4()),
+            project_id=pid,
+            title="安全措施",
+            is_leaf=1,
+            sort_order=1,
+            level=2,
+            requirement_ids=rid,
+            generated_content="本章落实安全措施与隐患排查，设置专职安全员。",
+            review_status="green",
+        )
+        ch_b = TechOutline(
+            id=str(uuid.uuid4()),
+            project_id=pid,
+            title="文明施工",
+            is_leaf=1,
+            sort_order=2,
+            level=2,
+            requirement_ids=rid,
+            generated_content="本章落实文明施工与场容场貌管理，设置封闭围挡。",
+            review_status="green",
+        )
+        db.add_all([ch_a, ch_b])
+        db.commit()
+
+        # 单章各自缺一项，合并后齐全
+        assert not matrix_issues_for_chapter(db, project, ch_a)
+        assert not matrix_issues_for_chapter(db, project, ch_b)
+    finally:
+        db.close()
+
+
 def test_write_and_qa_exception_sets_red(monkeypatch):
     init_db()
     db = SessionLocal()

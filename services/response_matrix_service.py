@@ -57,14 +57,16 @@ def _status_for_row(bound_chapters: list[dict[str, Any]], missing_elements: list
 def _chapter_coverage_for_requirement(
     chapter: TechOutline,
     req: TechRequirement,
+    *,
+    content: str | None = None,
 ) -> dict[str, Any]:
-    content = chapter.generated_content or ""
+    text = content if content is not None else (chapter.generated_content or "")
     candidates = extract_coverage_candidates(req.requirement_title, req.keyword)
-    matched = match_coverage_candidates(content, candidates)
+    matched = match_coverage_candidates(text, candidates)
     missing_elements = [
         element
         for element in split_mandatory_elements(req.mandatory_elements)
-        if not mandatory_element_covered(content, element)
+        if not mandatory_element_covered(text, element)
     ]
     return {
         "requirement_id": req.id,
@@ -72,7 +74,7 @@ def _chapter_coverage_for_requirement(
         "is_risk_item": req.is_risk_item,
         "matched_keywords": matched,
         "missing_elements": missing_elements,
-        "has_content": bool(content.strip()),
+        "has_content": bool(text.strip()),
         "candidates": candidates,
     }
 
@@ -135,7 +137,11 @@ def matrix_issues_for_chapter(
     project: Project,
     chapter: TechOutline,
 ) -> list[str]:
-    """单章绑定评分项的覆盖缺口，供生成后回写 review_errors。"""
+    """单章绑定评分项的覆盖缺口，供生成后回写 review_errors。
+
+    同一评分项绑定多章时，与响应矩阵汇总一致：合并全部绑定叶子正文后再判覆盖，
+    避免分工写作被单章误判为刚性缺口。
+    """
     req_ids = _load_requirement_ids(chapter.requirement_ids)
     if not req_ids:
         return []
@@ -155,9 +161,22 @@ def matrix_issues_for_chapter(
     if not content:
         return [f"评分覆盖：章节「{chapter.title}」正文为空，无法覆盖已绑定评分项"]
 
+    leaves = (
+        db.query(TechOutline)
+        .filter(TechOutline.project_id == project.id, TechOutline.is_leaf == 1)
+        .all()
+    )
+    chapters_by_req: dict[str, list[TechOutline]] = {}
+    for node in leaves:
+        for rid in _load_requirement_ids(node.requirement_ids):
+            if rid in req_ids:
+                chapters_by_req.setdefault(rid, []).append(node)
+
     issues: list[str] = []
     for req in requirements:
-        cov = _chapter_coverage_for_requirement(chapter, req)
+        bound = chapters_by_req.get(req.id) or [chapter]
+        combined = "\n".join((ch.generated_content or "") for ch in bound)
+        cov = _chapter_coverage_for_requirement(chapter, req, content=combined)
         title = req.requirement_title or req.id
         is_risk = int(req.is_risk_item or 0) == 1
         prefix = "刚性风险项" if is_risk else "评分项"

@@ -4,12 +4,21 @@ from __future__ import annotations
 
 import re
 
-from services.blind_bid_service import _COMPANY_MARKERS, _IDENTITY_PATTERNS
+from services.blind_bid_service import _IDENTITY_PATTERNS
 
 # 单章注入上限（字符），避免盲贴整份参考标书
 REFERENCE_BID_CHAPTER_LIMIT = 1800
 REFERENCE_BID_TOP_K = 4
 _MIN_PARA_LEN = 40
+
+# 仅替换明确自称/身份表述；勿用「电力公司」等通用行业后缀做全文替换
+_REFERENCE_SCRUB_MARKERS = (
+    "本公司",
+    "我公司",
+    "我方公司",
+    "投标人名称",
+    "投标单位",
+)
 
 
 def scrub_reference_identity(text: str) -> str:
@@ -23,7 +32,7 @@ def scrub_reference_identity(text: str) -> str:
     out = text
     for pattern in _IDENTITY_PATTERNS:
         out = pattern.sub("投标人", out)
-    for marker in _COMPANY_MARKERS:
+    for marker in _REFERENCE_SCRUB_MARKERS:
         if marker in out:
             out = out.replace(marker, "投标人")
     # 业绩/业主可追溯表述：合同编号弱化

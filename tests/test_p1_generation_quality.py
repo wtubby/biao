@@ -60,6 +60,18 @@ def test_scrub_reference_identity_removes_company_and_contact():
     assert "投标人" in cleaned
 
 
+def test_scrub_reference_identity_keeps_generic_power_company():
+    """「电力公司」等通用行业指代不应被整体替换成「投标人」。"""
+    raw = (
+        "本工程建设完成后，将按规定移交属地电力公司统一调度运行，"
+        "验收工作由建设单位与电力公司共同组织。"
+    )
+    cleaned = scrub_reference_identity(raw)
+    assert "电力公司" in cleaned
+    assert "属地投标人" not in cleaned
+    assert "与投标人共同组织" not in cleaned
+
+
 def test_select_reference_bid_snippets_scrubs_identity():
     ref = (
         "由某某建设集团有限公司编制施工进度计划，采用三级网络计划控制关键节点，"
