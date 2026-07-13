@@ -265,6 +265,14 @@ def _writer_chapter_task_body(bundle: dict) -> str:
     if chart_hint:
         base += f"\n\n## 图表要求\n{chart_hint}"
 
+    body_hint = bundle.get("body_format_hint")
+    if body_hint:
+        base += f"\n\n## 正文格式\n{body_hint}"
+
+    category_hint = bundle.get("bid_category_hint")
+    if category_hint:
+        base += f"\n\n## 方案类型\n{category_hint}"
+
     ref_bid = (bundle.get("reference_bid_text") or "").strip()
     if ref_bid:
         base += (

@@ -1,8 +1,16 @@
 from services.generation_config import (
+    BID_CATEGORY_CONSTRUCTION_ORG,
+    BID_CATEGORY_PROCUREMENT,
+    BODY_FORMAT_LIST,
     CHART_DENSITY_ABUNDANT,
+    bid_category_hint,
+    body_format_hint,
+    build_generation_hints,
     chart_density_hint,
     default_generation_config,
     get_generation_config,
+    list_bid_category_options,
+    smartart_hint,
     update_generation_config,
 )
 from services.word_estimate import estimate_from_leaves, format_word_count_display
@@ -59,3 +67,59 @@ def test_get_generation_config_defaults_non_power_domain_to_no_pack():
     project = Project(id="p2", extra_params='{"engineering_domain": "市政工程"}')
     cfg = get_generation_config(project)
     assert cfg["standards_pack"] == "none"
+
+
+def test_bid_category_body_format_and_smartart_defaults():
+    cfg = default_generation_config()
+    assert cfg["bid_category"] == "engineering_tech"
+    assert cfg["body_format"] == "general"
+    assert cfg["smartart_enabled"] is False
+
+
+def test_list_bid_category_options_has_five_types():
+    options = list_bid_category_options()
+    assert len(options) == 5
+    labels = {opt["label"] for opt in options}
+    assert "施工组织设计" in labels
+    assert "危大工程方案" in labels
+
+
+def test_legacy_bid_category_mapped_on_read():
+    project = Project(
+        id="p_legacy",
+        extra_params='{"generation_config": {"bid_category": "engineering"}}',
+    )
+    cfg = get_generation_config(project)
+    assert cfg["bid_category"] == "engineering_tech"
+
+
+def test_build_generation_hints_includes_smartart_when_enabled():
+    hints = build_generation_hints({
+        "chart_density": "normal",
+        "bid_category": "procurement_goods",
+        "body_format": "list_items",
+        "smartart_enabled": True,
+    })
+    assert "采购" in hints["bid_category_hint"]
+    assert "列表" in hints["body_format_hint"]
+    assert "ORG_DATA" in hints["chart_density_hint"]
+    assert "SmartArt" in hints["chart_density_hint"]
+
+
+def test_update_generation_config_new_fields():
+    project = Project(id="p3", extra_params="{}")
+    update_generation_config(
+        project,
+        bid_category=BID_CATEGORY_CONSTRUCTION_ORG,
+        body_format=BODY_FORMAT_LIST,
+        smartart_enabled=True,
+    )
+    cfg = get_generation_config(project)
+    assert cfg["bid_category"] == "construction_org"
+    assert cfg["body_format"] == "list_items"
+    assert cfg["smartart_enabled"] is True
+
+
+def test_smartart_hint_empty_when_disabled():
+    assert smartart_hint(False) == ""
+    assert "ORG_DATA" in smartart_hint(True)

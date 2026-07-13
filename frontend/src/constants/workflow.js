@@ -2,13 +2,6 @@
   { key: 'upload', label: '上传标书', icon: 'upload', description: '上传 PDF/DOCX 招标文件，自动解析评分项' },
   { key: 'confirm', label: '确认评分项', icon: 'check', description: '核对评分项与工程全局参数，确认刚性风险项' },
   {
-    key: 'commercial',
-    label: '商务标',
-    icon: 'list',
-    description: '可选：编辑并确认商务/资格响应草稿，导出独立分册',
-    optional: true,
-  },
-  {
     key: 'facts',
     label: '全局事实变量',
     icon: 'facts',

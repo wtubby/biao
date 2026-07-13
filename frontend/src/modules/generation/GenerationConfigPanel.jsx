@@ -11,11 +11,26 @@ import {
 } from '../../api/generationConfig.js';
 import { changeGenerationMode } from '../../api/outline.js';
 import { DisplayModeSwitch } from '../outline/components.jsx';
+import { TypesettingPanel } from './TypesettingPanel.jsx';
 
 const CHART_OPTIONS = [
   { value: 'none', label: '无' },
   { value: 'normal', label: '适中' },
   { value: 'abundant', label: '大量' },
+];
+
+const BID_CATEGORY_OPTIONS = [
+  { value: 'service_plan', label: '服务方案' },
+  { value: 'procurement_goods', label: '采购物资' },
+  { value: 'engineering_tech', label: '工程技术标' },
+  { value: 'construction_org', label: '施工组织设计' },
+  { value: 'hazardous_work', label: '危大工程方案' },
+];
+
+const BODY_FORMAT_OPTIONS = [
+  { value: 'general', label: '通用正文' },
+  { value: 'heading_hierarchy', label: '标题层级正文' },
+  { value: 'list_items', label: '列表项正文' },
 ];
 
 const STANDARDS_OPTIONS = [
@@ -165,9 +180,47 @@ function GenerationConfigPanel({
   const pageMin = config.target_pages_range?.min ?? 10;
   const pageMax = config.target_pages_range?.max ?? 1200;
   const wordsPerPage = config.estimate?.words_per_page ?? 780;
+  const bidCategoryOptions = (config.bid_category_options?.length
+    ? config.bid_category_options
+    : BID_CATEGORY_OPTIONS
+  ).map((opt) => ({ value: opt.value, label: opt.label }));
+  const activeBidCategory = config.bid_category_options?.find(
+    (opt) => opt.value === (config.bid_category || 'engineering_tech'),
+  ) || BID_CATEGORY_OPTIONS.find((opt) => opt.value === config.bid_category);
 
   return (
     <div className={`generation-config-panel${pagesSaving ? ' is-pages-saving' : ''}`}>
+      <div className="generation-config-inline-pair">
+        <ConfigRow label="方案类型">
+          <div className="generation-config-stack">
+            <Select
+              size="small"
+              className="generation-config-select generation-config-select--wide"
+              disabled={disabled || saving}
+              value={config.bid_category || 'engineering_tech'}
+              options={bidCategoryOptions}
+              onChange={(v) => patchConfig({ bid_category: v })}
+            />
+            {activeBidCategory?.description && (
+              <Text type="secondary" className="generation-config-meta">
+                {activeBidCategory.description}
+              </Text>
+            )}
+          </div>
+        </ConfigRow>
+
+        <ConfigRow label="正文格式">
+          <Select
+            size="small"
+            className="generation-config-select"
+            disabled={disabled || saving}
+            value={config.body_format || 'general'}
+            options={BODY_FORMAT_OPTIONS}
+            onChange={(v) => patchConfig({ body_format: v })}
+          />
+        </ConfigRow>
+      </div>
+
       <div className="generation-config-inline-pair">
         {showModeSwitch && (
           <ConfigRow label="生成档位">
@@ -238,6 +291,15 @@ function GenerationConfigPanel({
             checked={!!config.deep_humanize}
             disabled={disabled || saving}
             onChange={(v) => patchConfig({ deep_humanize: v })}
+          />
+        </label>
+        <label className="generation-config-switch-item">
+          <span className="generation-config-label">SmartArt</span>
+          <Switch
+            size="small"
+            checked={!!config.smartart_enabled}
+            disabled={disabled || saving}
+            onChange={(v) => patchConfig({ smartart_enabled: v })}
           />
         </label>
       </div>
@@ -367,6 +429,17 @@ function GenerationConfigPanel({
           </button>
         </div>
       )}
+
+      <TypesettingPanel
+        typesetting={config.typesetting}
+        options={config.typesetting_options}
+        disabled={disabled}
+        saving={saving}
+        onChange={(next) => patchConfig({ typesetting: next })}
+        onReset={() => patchConfig({
+          typesetting: config.typesetting_options?.defaults || config.typesetting,
+        })}
+      />
     </div>
   );
 }

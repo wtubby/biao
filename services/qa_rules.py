@@ -910,22 +910,6 @@ def check_global_fact_consistency(
                 )
                 break
 
-    voltage = str(params.get("电压等级") or "").strip()
-    if voltage:
-        mentioned = re.findall(r"(\d+(?:\.\d+)?)\s*[kK][vV]", text)
-        # 提取全局电压数字
-        gv = re.search(r"(\d+(?:\.\d+)?)", voltage)
-        if gv and mentioned:
-            expected = gv.group(1)
-            for m in mentioned:
-                if m != expected and abs(float(m) - float(expected)) > 0.01:
-                    # 允许出现更低电压等级（如站用变），仅当出现更高且差一档以上时告警
-                    if float(m) > float(expected) * 1.5:
-                        errors.append(
-                            f"电压等级疑似冲突：全局 {voltage}，正文出现 {m}kV"
-                        )
-                        break
-
     for key, val in extract_fact_kv_pairs(facts_text or ""):
         count_m = _COUNT_RE.search(val)
         if not count_m or key not in text:

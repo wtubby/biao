@@ -121,18 +121,6 @@ def check_cross_consistency(
         if not hard and not soft:
             items.append({"level": "pass", "message": f"D+N 节点均在 {duration} 天工期内"})
 
-    if project.voltage_level:
-        kv_in_doc = re.findall(r"(\d+)\s*kV", docx_text, re.I)
-        project_kv = re.search(r"(\d+)", project.voltage_level or "")
-        if project_kv and kv_in_doc:
-            expected = project_kv.group(1)
-            mismatched = [v for v in set(kv_in_doc) if v != expected]
-            if mismatched:
-                items.append({
-                    "level": "warn",
-                    "message": f"正文出现电压等级 {', '.join(m + 'kV' for m in mismatched)}，与全局 {project.voltage_level} 不一致",
-                })
-
     if duration:
         for num, _ in _DAYS_RE.findall(docx_text):
             if int(num) > duration * 2:

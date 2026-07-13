@@ -69,10 +69,6 @@ def run_hard_qa(
     if other_leaf_titles:
         errors.extend(check_chapter_scope(content, chapter_title or "", other_leaf_titles))
 
-    if project.voltage_level and project.voltage_level not in content:
-        if re.search(r"\d+\s*kV", content, re.I) and project.voltage_level not in content:
-            errors.append(f"电压等级与全局参数不一致（应为 {project.voltage_level}）")
-
     if project.duration_days:
         duration_mentions = re.findall(r"(\d+)\s*(天|日|日历天)", content)
         for num, _ in duration_mentions:

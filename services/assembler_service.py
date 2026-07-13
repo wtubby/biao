@@ -23,11 +23,14 @@ from chart.chart_service import (
 from config import OUTPUT_DIR
 from db.models import Project, TechOutline
 from services.blind_bid_service import anonymize_cover_meta, blind_header_text, is_blind_bid
-from services.numbering_service import HeadingNumbering, resolve_heading_numbering_preset
 from services.outline_order import sort_outline_tree_dfs
+from services.typesetting_config import (
+    TypesettingNumbering,
+    apply_typesetting_styles,
+    get_typesetting,
+)
 from services.word_styling import (
     add_blind_bid_header,
-    apply_professional_styles,
     append_toc_and_body_sections,
     create_cover_document,
     enable_auto_update_fields,
@@ -383,7 +386,8 @@ def assemble_document(
         for section in doc.sections:
             add_blind_bid_header(section, blind_header_text())
     chapters = sort_outline_tree_dfs(chapters)
-    heading_numbering = HeadingNumbering(doc, resolve_heading_numbering_preset(project))
+    typesetting = get_typesetting(project)
+    heading_numbering = TypesettingNumbering(doc, typesetting)
     emit_levels = _compute_heading_emit_levels(chapters)
     gantt_payloads = _collect_gantt_payloads(chapters)
     temp_files: list[Path] = []
@@ -418,7 +422,7 @@ def assemble_document(
 
         _append_document_gantt(doc, gantt_payloads, duration, temp_files, counters)
 
-        apply_professional_styles(doc)
+        apply_typesetting_styles(doc, typesetting)
         enable_auto_update_fields(doc)
         doc.save(str(out_path))
     finally:

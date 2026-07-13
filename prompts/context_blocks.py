@@ -96,6 +96,16 @@ def format_generation_extras(bundle: dict, *, style: ExtrasStyle = "writer") -> 
         extras.append(
             f"图表要求：{chart_hint}" if style == "qa" else f"## 图表要求\n{chart_hint}"
         )
+    body_hint = (bundle.get("body_format_hint") or "").strip()
+    if body_hint:
+        extras.append(
+            f"正文格式：{body_hint}" if style == "qa" else f"## 正文格式\n{body_hint}"
+        )
+    category_hint = (bundle.get("bid_category_hint") or "").strip()
+    if category_hint:
+        extras.append(
+            f"方案类型：{category_hint}" if style == "qa" else f"## 方案类型\n{category_hint}"
+        )
     standards_hint = (bundle.get("standards_hint") or "").strip()
     if standards_hint:
         extras.append(

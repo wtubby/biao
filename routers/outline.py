@@ -9,10 +9,12 @@ from sqlalchemy.orm import Session
 from config import TARGET_PAGES_DEFAULT, UPLOAD_DIR
 from db.database import get_db
 from db.models import Project, TechOutline, TechRequirement
+from services.typesetting_config import list_typesetting_options
 from services.generation_config import (
     TARGET_PAGES_MAX,
     TARGET_PAGES_MIN,
     get_generation_config,
+    list_bid_category_options,
     update_generation_config,
 )
 from services.reference_bid_service import extract_reference_text_from_file
@@ -74,6 +76,10 @@ class GenerationConfigUpdate(BaseModel):
     custom_total_words: int | None = None
     require_risk_binding: bool | None = None
     deep_humanize: bool | None = None
+    bid_category: str | None = None
+    body_format: str | None = None
+    smartart_enabled: bool | None = None
+    typesetting: dict | None = None
 
 
 def _leaf_dicts_from_outline(outline: list[dict]) -> list[dict]:
@@ -103,6 +109,8 @@ def _build_generation_payload(db: Session, project: Project) -> dict:
             **estimate,
             "display_words": format_word_count_display(estimate["total_words"]),
         },
+        "typesetting_options": list_typesetting_options(),
+        "bid_category_options": list_bid_category_options(),
     }
 
 

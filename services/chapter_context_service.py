@@ -20,6 +20,7 @@ from prompts.writer_prompt import (
 )
 from services.blind_bid_service import blind_bid_writer_constraints, is_blind_bid
 from services.generation_config import (
+    build_generation_hints,
     chart_density_hint,
     get_generation_config,
     standards_pack_hint,
@@ -308,7 +309,7 @@ def build_context_bundle(
         "global_facts_text": facts_text,
         "sibling_leaf_titles": sibling_leaf_titles,
         "other_leaf_titles": other_leaf_titles,
-        "chart_density_hint": chart_density_hint(gen_config.get("chart_density") or "normal"),
+        **build_generation_hints(gen_config),
         "standards_hint": standards_hint,
         "reference_bid_text": reference_bid_text,
         "reference_bid_miss": reference_bid_miss,

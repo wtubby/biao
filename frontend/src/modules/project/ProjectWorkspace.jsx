@@ -1,6 +1,6 @@
 import {
   useState, useEffect, useCallback, useMemo, useRef,
-  Card, message, Spin, Alert, Badge, Menu, Tooltip, Dragger,
+  Card, message, Spin, Alert, Badge, Menu, Tooltip,
 } from '../../globals.js';
 
 import { apiFetch, API, formatApiError } from '../../api/client.js';
@@ -11,6 +11,8 @@ import {
   computeRequirementStats,
 } from '../../api/requirements.js';
 import { WORKFLOW_STEPS, STEP_ORDER, getNextAccessibleStep } from '../../constants/workflow.js';
+import { MacroWorkflowBar } from '../../components/MacroWorkflowBar.jsx';
+import { getMacroWorkflowState } from '../../constants/macroWorkflow.js';
 import { PROJECT_STATUS_LABELS } from '../../constants/project.js';
 import { Icon } from '../../components/icons.jsx';
 import {
@@ -19,14 +21,14 @@ import {
 import { PageSuspense } from '../../components/PageSuspense.jsx';
 import {
   TenderDetailPanel,
-  CommercialPanel,
   GlobalFactsPanel,
   OutlineEditor,
   GenerationPanel,
   PreviewExport,
   SourcePreviewPane,
-  ParseProgressPanel,
 } from './lazyPanels.js';
+import { UploadConfigPanel } from '../parse/UploadConfigPanel.jsx';
+import { UploadStepPanel } from '../parse/UploadStepPanel.jsx';
 
 function ProjectWorkspace({ project: initialProject, onBack, onOpenSettings }) {
   const [project, setProject] = useState(initialProject);
@@ -208,13 +210,11 @@ function ProjectWorkspace({ project: initialProject, onBack, onOpenSettings }) {
   const canGoGenerate = ['outline_locked', 'generating', 'done'].includes(project.status);
   // 大纲锁定后即可进预览：黄章可验章/改写；无正文时预览页会提示
   const canGoPreview = canGoGenerate || hasGeneratedChapter;
-  const canGoCommercial = canGoConfirm && project.bid_scope === 'technical_commercial';
   const generatingCount = project.status === 'generating' ? 1 : 0;
 
   const stepAccess = {
     upload: true,
     confirm: canGoConfirm,
-    commercial: canGoCommercial,
     facts: canGoFacts,
     outline: canGoOutline,
     generate: canGoGenerate,
@@ -223,7 +223,6 @@ function ProjectWorkspace({ project: initialProject, onBack, onOpenSettings }) {
 
   const stepUnlockHint = {
     confirm: '请先上传并完成招标文件解析',
-    commercial: '可选步骤：请先在确认页开启「技术标+商务标」',
     facts: '可选步骤：请先上传并完成招标文件解析；工程核心参数请在确认步骤维护',
     outline: '须在确认步骤保存完整工程信息，并点击「进入大纲策划」（评分项可选）',
     generate: '请先在大纲策划中点击「锁定并继续」，将项目状态推进到可生成（锁定后仍可返回调整）',
@@ -238,6 +237,8 @@ function ProjectWorkspace({ project: initialProject, onBack, onOpenSettings }) {
     done: workflowDone,
     percent: Math.round((workflowDone / baseProgress.total) * 100),
   };
+  const macroWorkflowSteps = getMacroWorkflowState(currentPage, stepAccess);
+  const parseConfigReady = !['draft', 'parsing'].includes(project.status);
 
   const goPrev = () => {
     if (currentStepIndex > 0) setCurrentPage(STEP_ORDER[currentStepIndex - 1]);
@@ -322,14 +323,15 @@ function ProjectWorkspace({ project: initialProject, onBack, onOpenSettings }) {
           statusText={PROJECT_STATUS_LABELS[project.status] || project.status}
           workflowProgress={workflowProgress}
         />
+        <MacroWorkflowBar steps={macroWorkflowSteps} />
         <div className="workspace-main-scroll">
         <PageSuspense>
         <div className="workspace-main-content">
       {currentPage === 'upload' && (
-        <div className="parse-dual-layout">
+        <div className="parse-triple-layout">
           <Card
             title="招标原文"
-            className="section-card parse-dual-left"
+            className="section-card parse-triple-left"
             variant="borderless"
             style={{ marginTop: 0 }}
           >
@@ -346,51 +348,30 @@ function ProjectWorkspace({ project: initialProject, onBack, onOpenSettings }) {
 
           <Card
             title="上传与解析"
-            className="section-card parse-dual-right"
+            className="section-card parse-triple-center"
             variant="borderless"
             style={{ marginTop: 0 }}
           >
-            {project.parse_error && project.status !== 'parsing' && (
-              <Alert
-                type="error"
-                showIcon
-                message="上次解析失败，请重新上传文件"
-                description={project.parse_error}
-                style={{ marginBottom: 16 }}
-              />
-            )}
-            <Spin spinning={uploading} tip="正在上传文件...">
-              <div className="upload-dragger-wrap">
-                <Dragger
-                  accept=".pdf,.docx"
-                  showUploadList={false}
-                  beforeUpload={handleUpload}
-                  disabled={loadingProject || uploading || project.status === 'parsing'}
-                >
-                  <div className="upload-icon-wrap">
-                    <Icon name="upload" size={40} />
-                  </div>
-                  <p style={{ fontSize: 15, fontWeight: 500, margin: '0 0 6px' }}>
-                    {project.status === 'parsing' ? '解析进行中，请稍候' : '点击或拖拽上传招标文件'}
-                  </p>
-                  <p style={{ color: '#6b7280', margin: 0, fontSize: 13 }}>
-                    支持 PDF（带文字层）和 DOCX；解析完成后将自动进入确认步骤
-                  </p>
-                </Dragger>
-              </div>
-            </Spin>
-            <Alert
-              type="warning"
-              showIcon
-              style={{ marginTop: 12, marginBottom: 16 }}
-              message="PDF 须为文字层版本（非扫描件）。扫描件请先 OCR 后再上传。"
-            />
-            <ParseProgressPanel
-              status={project.status}
-              parseProgress={project.parse_progress}
-              parseError={project.parse_error}
-              parseTimedOut={parseTimedOut}
+            <UploadStepPanel
+              project={project}
+              loadingProject={loadingProject}
               uploading={uploading}
+              parseTimedOut={parseTimedOut}
+              onUpload={handleUpload}
+            />
+          </Card>
+
+          <Card
+            title="生成配置"
+            className="section-card parse-triple-right"
+            variant="borderless"
+            style={{ marginTop: 0 }}
+          >
+            <UploadConfigPanel
+              projectId={project.id}
+              project={project}
+              parseReady={parseConfigReady}
+              onProjectChange={(patch) => setProject((p) => ({ ...p, ...patch }))}
             />
           </Card>
         </div>
@@ -438,17 +419,6 @@ function ProjectWorkspace({ project: initialProject, onBack, onOpenSettings }) {
         <GlobalFactsPanel projectId={project.id} />
       )}
 
-      {currentPage === 'commercial' && (
-        <CommercialPanel
-          projectId={project.id}
-          onStatusChange={(data) => {
-            if (data?.bid_scope) {
-              setProject((p) => ({ ...p, bid_scope: data.bid_scope }));
-            }
-          }}
-        />
-      )}
-
       {currentPage === 'outline' && (
         <OutlineEditor
           projectId={project.id}
@@ -489,7 +459,6 @@ function ProjectWorkspace({ project: initialProject, onBack, onOpenSettings }) {
         <PreviewExport
           projectId={project.id}
           durationDays={project.duration_days}
-          bidScope={project.bid_scope || 'technical'}
         />
       )}
         </div>

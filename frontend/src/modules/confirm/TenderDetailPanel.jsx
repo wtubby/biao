@@ -7,7 +7,6 @@ import {
 import { apiFetch } from '../../api/client.js';
 import { fetchTenderDetail, updateTenderDetail } from '../../api/tenderDetail.js';
 import { fetchDomains } from '../../api/domains.js';
-import { toggleCommercialScope } from '../../api/commercial.js';
 import { PROJECT_TYPES, ENGINEERING_DOMAINS, CONTRACT_MODES } from '../../constants/project.js';
 import { ContradictionsAlert } from './ContradictionsAlert.jsx';
 import { RequirementsTable } from './RequirementsTable.jsx';
@@ -66,7 +65,6 @@ function TenderDetailPanel({
   const [domainOptions, setDomainOptions] = useState(
     ENGINEERING_DOMAINS.map((d) => ({ key: d, label: d })),
   );
-  const [bidScopeSaving, setBidScopeSaving] = useState(false);
   const [editingQualIndexes, setEditingQualIndexes] = useState(() => new Set());
   const [noticeForm] = Form.useForm();
   const bidDomain = Form.useWatch('bid_domain', noticeForm);
@@ -402,25 +400,6 @@ function TenderDetailPanel({
   }
 
   const packageLabel = detail.notice?.package_name || project?.name || '当前标段';
-  const commercialEnabled = project?.bid_scope === 'technical_commercial';
-
-  const handleBidScopeChange = async (enabled) => {
-    setBidScopeSaving(true);
-    try {
-      const result = await toggleCommercialScope(projectId, enabled);
-      if (onProjectSaved) {
-        const refreshed = await apiFetch(`/projects/${projectId}`);
-        onProjectSaved(refreshed);
-      } else {
-        onProjectSaved?.({ ...project, bid_scope: result.bid_scope });
-      }
-      message.success(enabled ? '已开启技术标+商务标' : '已切换为仅技术标');
-    } catch (e) {
-      message.error(e.message);
-    } finally {
-      setBidScopeSaving(false);
-    }
-  };
 
   return (
     <div className="tender-detail-panel">
@@ -437,28 +416,6 @@ function TenderDetailPanel({
         />
       )}
       <ContradictionsAlert projectId={projectId} />
-
-      <div className="tender-detail-block">
-        <SectionTitle>生成范围</SectionTitle>
-        <Space align="center" wrap>
-          <Text type="secondary">本项目生成：</Text>
-          <Radio.Group
-            value={commercialEnabled ? 'technical_commercial' : 'technical'}
-            disabled={bidScopeSaving}
-            onChange={(e) => handleBidScopeChange(e.target.value === 'technical_commercial')}
-            optionType="button"
-            buttonStyle="solid"
-            options={[
-              { label: '仅技术标', value: 'technical' },
-              { label: '技术标+商务标', value: 'technical_commercial' },
-            ]}
-          />
-          {bidScopeSaving && <Spin size="small" />}
-        </Space>
-        <div className="tender-package-hint" style={{ marginTop: 8 }}>
-          开启商务标后，侧栏将出现「商务标」可选步骤，并可在预览页导出独立商务/资格 Word 分册。
-        </div>
-      </div>
 
       <div className="tender-detail-block">
         <SectionTitle>投标人须知</SectionTitle>
