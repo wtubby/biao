@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Float, Integer, LargeBinary, Text
+from sqlalchemy import DateTime, Float, Integer, LargeBinary, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from db.database import Base
@@ -104,6 +104,11 @@ class KnowledgeItem(Base):
 
 class KnowledgeChunk(Base):
     __tablename__ = "knowledge_chunks"
+    __table_args__ = (
+        UniqueConstraint(
+            "folder_path", "chunk_hash", name="uq_knowledge_chunks_folder_hash"
+        ),
+    )
 
     id: Mapped[str] = mapped_column(Text, primary_key=True, default=_uuid)
     folder_path: Mapped[str] = mapped_column(Text, index=True)

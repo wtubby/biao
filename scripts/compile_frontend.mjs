@@ -1,4 +1,4 @@
-import { existsSync } from "fs";
+import { existsSync, readdirSync, rmSync } from "fs";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import { createRequire } from "module";
@@ -6,11 +6,21 @@ import { createRequire } from "module";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const src = join(root, "frontend", "src", "app.jsx");
 const outdir = join(root, "frontend");
+const chunksDir = join(outdir, "chunks");
 const require = createRequire(import.meta.url);
 
 if (!existsSync(src)) {
   console.error("缺少 frontend/src/app.jsx，请先运行 node scripts/split_frontend.mjs");
   process.exit(1);
+}
+
+// 清理旧 chunk，避免浏览器/懒加载仍引用过期 hash 文件
+if (existsSync(chunksDir)) {
+  for (const name of readdirSync(chunksDir)) {
+    if (name.endsWith(".js")) {
+      rmSync(join(chunksDir, name), { force: true });
+    }
+  }
 }
 
 let esbuild;

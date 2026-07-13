@@ -17,6 +17,10 @@ function OutlineReviewBadge({ status }) {
 }
 
 /** 共用父子索引，避免 buildOutlineTreeData / getOrderedLeaves 各建一遍 */
+function sortOutlineSiblings(items) {
+  return [...items].sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+}
+
 function buildOutlineIndex(nodes) {
   const byId = new Map(nodes.map((n) => [n.id, n]));
   const childrenOf = new Map();
@@ -29,7 +33,68 @@ function buildOutlineIndex(nodes) {
       roots.push(n);
     }
   });
+  roots.sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+  childrenOf.forEach((kids, parentId) => {
+    childrenOf.set(parentId, sortOutlineSiblings(kids));
+  });
   return { byId, childrenOf, roots };
+}
+
+const CN_DIGITS = '〇一二三四五六七八九';
+
+function cnIndex(n) {
+  if (n <= 0) return String(n);
+  if (n <= 10) return n === 10 ? '十' : CN_DIGITS[n];
+  if (n < 20) return `十${CN_DIGITS[n - 10]}`;
+  const tens = Math.floor(n / 10);
+  const ones = n % 10;
+  const tensPart = tens === 1 ? '' : CN_DIGITS[tens];
+  const onesPart = ones ? CN_DIGITS[ones] : '';
+  return `${tensPart}十${onesPart}`;
+}
+
+/** 与 Word 导出 numbering_service 预设一致 */
+function formatOutlineNumberLabel(preset, level, counters) {
+  const c = counters;
+  switch (preset) {
+    case 'chapter_cn':
+      if (level === 1) return `第${c[0]}章`;
+      if (level === 2) return `第${c[1]}节`;
+      if (level === 3) return `${cnIndex(c[2])}、`;
+      return `（${c[3]}）`;
+    case 'outline_mixed':
+      if (level === 1) return `第${c[0]}章`;
+      if (level === 2) return `${c[0]}.${c[1]}`;
+      if (level === 3) return `${c[0]}.${c[1]}.${c[2]}`;
+      return `（${c[3]}）`;
+    case 'none':
+      return '';
+    case 'decimal':
+    default:
+      return c.slice(0, level).join('.');
+  }
+}
+
+/** 按树结构生成各节点展示用多级编号（编辑态全量显示，含空容器节点） */
+function computeOutlineNumberLabels(nodes, preset = 'decimal') {
+  if (!nodes.length || preset === 'none') return new Map();
+  const { childrenOf, roots } = buildOutlineIndex(nodes);
+  const labels = new Map();
+  const counters = [0, 0, 0, 0];
+
+  const walk = (items, depth) => {
+    items.forEach((node) => {
+      counters[depth - 1] += 1;
+      for (let i = depth; i < counters.length; i += 1) counters[i] = 0;
+      const label = formatOutlineNumberLabel(preset, depth, counters);
+      if (label) labels.set(node.id, label);
+      const kids = childrenOf.get(node.id);
+      if (kids?.length) walk(kids, depth + 1);
+    });
+  };
+
+  walk(roots, 1);
+  return labels;
 }
 
 function buildOutlineTreeData(nodes, renderTitle) {
@@ -146,6 +211,7 @@ export {
   OutlineReviewBadge,
   buildOutlineIndex,
   buildOutlineTreeData,
+  computeOutlineNumberLabels,
   getOrderedLeaves,
   newOutlineId,
   getNodeDescendantIds,

@@ -81,9 +81,85 @@ def test_resolve_heading_numbering_preset_invalid_falls_back_decimal():
     assert resolve_heading_numbering_preset(project) == "decimal"
 
 
+def test_heading_numbering_uses_emit_level_when_container_skipped():
+    from types import SimpleNamespace
+
+    from docx.oxml.ns import qn
+
+    from services.assembler_service import assemble_document
+
+    project = SimpleNamespace(
+        id="p1",
+        name="测试",
+        voltage_level="",
+        capacity="",
+        location="",
+        duration_days=90,
+        extra_params=None,
+    )
+    chapters = [
+        SimpleNamespace(
+            id="1",
+            parent_id=None,
+            title="施工组织",
+            level=1,
+            is_leaf=0,
+            generated_content=None,
+            review_status="green",
+            sort_order=1,
+        ),
+        SimpleNamespace(
+            id="1.1",
+            parent_id="1",
+            title="土建工程",
+            level=2,
+            is_leaf=0,
+            generated_content=None,
+            review_status="green",
+            sort_order=2,
+        ),
+        SimpleNamespace(
+            id="1.1.1",
+            parent_id="1.1",
+            title="基础施工",
+            level=3,
+            is_leaf=1,
+            generated_content="正文",
+            review_status="green",
+            sort_order=3,
+        ),
+    ]
+
+    with __import__("tempfile").TemporaryDirectory() as tmp:
+        import services.assembler_service as asm
+
+        old_out = asm.OUTPUT_DIR
+        asm.OUTPUT_DIR = tmp
+        try:
+            path = assemble_document(project, chapters)
+            doc = Document(str(path))
+        finally:
+            asm.OUTPUT_DIR = old_out
+
+    heading_paras = [
+        p for p in doc.paragraphs
+        if p.style and p.style.name.startswith("Heading")
+        and p._p.pPr is not None
+        and p._p.pPr.find(qn("w:numPr")) is not None
+    ]
+    assert len(heading_paras) == 2
+    ilvls = []
+    for p in heading_paras:
+        num_pr = p._p.pPr.find(qn("w:numPr")) if p._p.pPr is not None else None
+        ilvl_el = num_pr.find(qn("w:ilvl")) if num_pr is not None else None
+        ilvls.append(int(ilvl_el.get(qn("w:val"))) if ilvl_el is not None else None)
+    assert ilvls == [0, 1]
+
+
 def test_list_heading_numbering_presets_includes_none_and_decimal():
     presets = list_heading_numbering_presets()
     ids = [p["id"] for p in presets]
     assert "none" in ids
     assert "decimal" in ids
     assert "chapter_cn" in ids
+

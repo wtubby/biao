@@ -4,7 +4,14 @@ import asyncio
 import threading
 import time
 
-from services.background_jobs import spawn_async, spawn_sync
+from services import background_jobs
+from services.background_jobs import (
+    is_job_running,
+    release_job,
+    spawn_async,
+    spawn_sync,
+    try_acquire_job,
+)
 
 
 def test_spawn_sync_runs_off_caller_thread():
@@ -42,6 +49,64 @@ def test_spawn_async_runs_coroutine_off_caller_thread():
     assert seen["done"] is True
     assert seen["tid"] is not None
     assert seen["tid"] != caller
+
+
+def test_try_acquire_job_is_exclusive():
+    key = "generate:acquire-test"
+    release_job(key)
+    assert try_acquire_job(key) is True
+    assert try_acquire_job(key) is False
+    assert is_job_running(key) is True
+    release_job(key)
+    assert is_job_running(key) is False
+    assert try_acquire_job(key) is True
+    release_job(key)
+
+
+def test_spawn_async_dedupe_key_skips_duplicate():
+    release = threading.Event()
+    started = threading.Event()
+    runs = {"n": 0}
+
+    async def job():
+        runs["n"] += 1
+        started.set()
+        await asyncio.to_thread(release.wait)
+
+    key = "generate:dedupe-test"
+    release_job(key)
+
+    assert spawn_async(job, name="a", dedupe_key=key) is True
+    assert started.wait(timeout=2)
+    assert spawn_async(job, name="b", dedupe_key=key) is False
+
+    release.set()
+    deadline = time.time() + 2
+    while key in background_jobs._running_keys and time.time() < deadline:
+        time.sleep(0.01)
+
+    assert runs["n"] == 1
+    assert spawn_async(job, name="c", dedupe_key=key) is True
+    deadline = time.time() + 2
+    while key in background_jobs._running_keys and time.time() < deadline:
+        time.sleep(0.01)
+
+
+def test_spawn_async_already_acquired_releases_on_finish():
+    key = "generate:preacquired"
+    release_job(key)
+    assert try_acquire_job(key) is True
+    done = threading.Event()
+
+    async def job():
+        done.set()
+
+    assert spawn_async(job, name="pre", dedupe_key=key, already_acquired=True) is True
+    assert done.wait(timeout=2)
+    deadline = time.time() + 2
+    while is_job_running(key) and time.time() < deadline:
+        time.sleep(0.01)
+    assert is_job_running(key) is False
 
 
 def test_spawn_sync_swallows_exceptions():

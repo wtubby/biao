@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from config import OUTPUT_DIR
 from db.migrations import BID_SCOPE_TECHNICAL, BID_SCOPE_TECHNICAL_COMMERCIAL
 from db.models import CommercialSection, Project
+from services.assembler_service import _insert_markdown_table, _is_markdown_table
 from services.tender_detail_service import get_tender_detail
 from services.word_styling import apply_professional_styles
 
@@ -283,14 +284,33 @@ def commercial_status(db: Session, project: Project) -> dict[str, Any]:
         bucket["total"] += 1
         if row.status == STATUS_CONFIRMED:
             bucket["confirmed"] += 1
+    confirmed_count = sum(1 for r in rows if r.status == STATUS_CONFIRMED)
+    draft_count = sum(1 for r in rows if r.status == STATUS_DRAFT)
     return {
         "bid_scope": get_bid_scope(project),
         "enabled": get_bid_scope(project) == BID_SCOPE_TECHNICAL_COMMERCIAL,
         "section_count": len(rows),
-        "confirmed_count": sum(1 for r in rows if r.status == STATUS_CONFIRMED),
+        "confirmed_count": confirmed_count,
+        "draft_count": draft_count,
         "by_section_key": by_key,
         "sections": [section_to_dict(r) for r in rows],
     }
+
+
+def validate_commercial_export_ready(
+    db: Session,
+    project: Project,
+    *,
+    allow_draft: bool = False,
+) -> int:
+    """未确认章节软拦截：有草稿且未放行时抛 ValueError；返回 draft_count。"""
+    rows = list_commercial_sections(db, project.id)
+    draft_count = sum(1 for r in rows if r.status == STATUS_DRAFT)
+    if draft_count and not allow_draft:
+        raise ValueError(
+            f"还有 {draft_count} 节未确认，正式导出前请先在商务标页逐条确认"
+        )
+    return draft_count
 
 
 def assemble_commercial_markdown(db: Session, project: Project) -> str:
@@ -339,6 +359,38 @@ def build_commercial_draft(project: Project) -> dict[str, Any]:
     }
 
 
+def _append_commercial_markdown_to_doc(doc: Document, md: str) -> None:
+    """把商务标 Markdown 写入 Word：标题 / 段落 / Markdown 表格（与技术标装配一致）。"""
+    lines = [line.strip() for line in md.splitlines()]
+    i = 0
+    while i < len(lines):
+        stripped = lines[i]
+        if not stripped:
+            i += 1
+            continue
+        if stripped.startswith("# "):
+            p = doc.add_heading(stripped[2:].strip(), level=0)
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            i += 1
+        elif stripped.startswith("## "):
+            doc.add_heading(stripped[3:].strip(), level=1)
+            i += 1
+        elif stripped.startswith("### "):
+            doc.add_heading(stripped[4:].strip(), level=2)
+            i += 1
+        elif stripped.startswith("|"):
+            remaining = lines[i:]
+            if _is_markdown_table(remaining):
+                i += _insert_markdown_table(doc, remaining)
+            else:
+                # 非标准表格行：保留为段落，避免静默丢弃
+                doc.add_paragraph(stripped)
+                i += 1
+        else:
+            doc.add_paragraph(stripped)
+            i += 1
+
+
 def export_commercial_docx(project: Project, db: Session | None = None) -> Path:
     if db is not None:
         md = assemble_commercial_markdown(db, project)
@@ -351,21 +403,7 @@ def export_commercial_docx(project: Project, db: Session | None = None) -> Path:
     out_path = out_dir / f"{safe_name}_商务资格_{date_tag}.docx"
 
     doc = Document()
-    for line in md.splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-        if stripped.startswith("# "):
-            p = doc.add_heading(stripped[2:].strip(), level=0)
-            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        elif stripped.startswith("## "):
-            doc.add_heading(stripped[3:].strip(), level=1)
-        elif stripped.startswith("### "):
-            doc.add_heading(stripped[4:].strip(), level=2)
-        elif stripped.startswith("|"):
-            continue
-        else:
-            doc.add_paragraph(stripped)
+    _append_commercial_markdown_to_doc(doc, md)
 
     detail = get_tender_detail(project)
     qual_items = detail.get("qualification_items") or []

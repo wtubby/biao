@@ -52,3 +52,27 @@ def ensure_schema() -> None:
             if "keywords" not in kc_cols:
                 conn.execute(text("ALTER TABLE knowledge_chunks ADD COLUMN keywords TEXT"))
                 logger.info("已为 knowledge_chunks 表添加 keywords 列")
+
+            # 先清历史重复，再补 (folder_path, chunk_hash) 唯一索引
+            indexes = {
+                row[1]
+                for row in conn.execute(
+                    text("PRAGMA index_list(knowledge_chunks)")
+                ).fetchall()
+            }
+            if "uq_knowledge_chunks_folder_hash" not in indexes:
+                conn.execute(
+                    text(
+                        "DELETE FROM knowledge_chunks WHERE id NOT IN ("
+                        "  SELECT MIN(id) FROM knowledge_chunks"
+                        "  GROUP BY folder_path, chunk_hash"
+                        ")"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "CREATE UNIQUE INDEX uq_knowledge_chunks_folder_hash "
+                        "ON knowledge_chunks(folder_path, chunk_hash)"
+                    )
+                )
+                logger.info("已为 knowledge_chunks 添加 (folder_path, chunk_hash) 唯一索引")

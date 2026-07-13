@@ -15,6 +15,7 @@ import {
 } from '../../api/chapter.js';
 import { fetchOutline } from '../../api/outline.js';
 import { downloadFromApi } from '../../api/download.js';
+import { fetchCommercialStatus } from '../../api/commercial.js';
 import { ChapterStatusIcon } from '../../components/icons.jsx';
 import { PromptInspectorDrawer } from '../../components/PromptInspectorDrawer.jsx';
 import { ComplianceReportDrawer } from '../compliance/ComplianceReportDrawer.jsx';
@@ -317,16 +318,47 @@ function PreviewExport({ projectId, durationDays, bidScope = 'technical' }) {
     await confirmIncompleteThenExport(asPdf);
   };
 
-  const handleExportCommercial = async () => {
+  const doExportCommercial = async ({ allowDraft = false } = {}) => {
     setExporting(true);
     try {
-      await downloadFromApi(`/projects/${projectId}/export-commercial`, `${projectId}_商务资格.docx`);
-      message.success('商务/资格响应草稿已导出');
+      const query = allowDraft ? '?allow_draft=true' : '';
+      const res = await downloadFromApi(
+        `/projects/${projectId}/export-commercial${query}`,
+        `${projectId}_商务资格.docx`,
+      );
+      const draftCount = Number(res.headers.get('X-Draft-Sections') || 0);
+      if (draftCount > 0) {
+        message.warning(`商务/资格响应已导出；仍有 ${draftCount} 节未确认，请人工核对后再递交`);
+      } else {
+        message.success('商务/资格响应已导出');
+      }
     } catch (e) {
       message.error(e.message || '导出失败');
     } finally {
       setExporting(false);
     }
+  };
+
+  const handleExportCommercial = async () => {
+    let draftCount = 0;
+    try {
+      const status = await fetchCommercialStatus(projectId);
+      draftCount = Number(status.draft_count || 0);
+    } catch (e) {
+      message.error(e.message || '获取商务标状态失败');
+      return;
+    }
+    if (draftCount > 0) {
+      Modal.confirm({
+        title: '还有未确认的商务/资格章节',
+        content: `还有 ${draftCount} 节未确认，导出内容可能仍含系统草稿或占位文字。是否仍要导出？`,
+        okText: '仍然导出',
+        cancelText: '取消',
+        onOk: () => doExportCommercial({ allowDraft: true }),
+      });
+      return;
+    }
+    await doExportCommercial({ allowDraft: false });
   };
 
   const handleTreeSelect = (keys) => {

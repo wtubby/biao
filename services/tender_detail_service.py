@@ -160,6 +160,13 @@ def _normalize_tender_detail(raw: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _commerce_score_dedupe_key(item: dict[str, Any]) -> tuple[str, str]:
+    """商务评分项去重键：title + criteria 前缀，避免「未命名评分项」撞车吞数据。"""
+    title = str(item.get("title") or "").strip()
+    criteria = str(item.get("criteria") or "").strip()
+    return (title, criteria[:80])
+
+
 def merge_tender_detail(target: dict[str, Any], incoming: dict[str, Any]) -> None:
     inc = _normalize_tender_detail(incoming)
     notice = target.setdefault("notice", empty_notice())
@@ -183,12 +190,14 @@ def merge_tender_detail(target: dict[str, Any], incoming: dict[str, Any]) -> Non
             target.setdefault("qualification_items", []).append(item)
             seen_keys.add(key)
 
-    seen_titles = {str(i.get("title") or "").strip() for i in target.get("commerce_scores") or []}
+    seen_scores = {
+        _commerce_score_dedupe_key(i) for i in target.get("commerce_scores") or []
+    }
     for item in inc["commerce_scores"]:
-        title = item["title"]
-        if title not in seen_titles:
+        key = _commerce_score_dedupe_key(item)
+        if key not in seen_scores:
             target.setdefault("commerce_scores", []).append(item)
-            seen_titles.add(title)
+            seen_scores.add(key)
 
 
 def apply_notice_to_project(

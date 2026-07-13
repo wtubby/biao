@@ -4,7 +4,8 @@ from fastapi import HTTPException
 
 # draft → parsing → confirming → planning → outline_locked → generating → done
 ALLOW_UPLOAD = frozenset({"draft", "confirming", "planning"})
-ALLOW_OUTLINE_GENERATE = frozenset({"planning", "generating", "done"})
+# 与 SAVE/LOCK 一致：仅 planning。generating/done 下整树删重建会冲掉已写正文。
+ALLOW_OUTLINE_GENERATE = frozenset({"planning"})
 ALLOW_OUTLINE_SAVE = frozenset({"planning"})
 ALLOW_OUTLINE_LOCK = frozenset({"planning"})
 ALLOW_GENERATE = frozenset({"outline_locked", "generating", "done"})

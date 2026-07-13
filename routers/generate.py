@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from db.database import get_db
 from db.models import Project, TechOutline
-from services.background_jobs import spawn_async
+from services.background_jobs import release_job, spawn_async, try_acquire_job
 from services.generation_service import generate_single_chapter, run_generation
 from services.project_status import ALLOW_GENERATE, require_status
 from services.prompt_debug_service import parse_stored_prompt_debug
@@ -48,14 +48,64 @@ class DetectAiClichesRequest(BaseModel):
     content: str | None = None
 
 
-def _claim_generation_slot(project: Project, db: Session, action: str) -> None:
-    """同步抢占生成槽位，避免连点启动多个后台任务。"""
+def _generation_job_key(project_id: str) -> str:
+    return f"generate:{project_id}"
+
+
+def _claim_generation_slot(project: Project, db: Session, action: str) -> str:
+    """原子抢占生成槽位，避免连点启动多个后台任务。
+
+    先占进程内 dedupe 槽（堵住 commit→spawn 窗口，并识别崩溃残留），
+    再用条件 UPDATE 保证跨请求互斥。返回已占用的 job key，供 spawn 收尾释放。
+    """
     require_status(project, ALLOW_GENERATE, action)
-    if project.status == "generating":
+    job_key = _generation_job_key(project.id)
+    if not try_acquire_job(job_key):
         raise HTTPException(409, "批量生成进行中，请稍后再试")
-    project.status = "generating"
-    project.pause_requested = 0
-    db.commit()
+
+    try:
+        if project.status == "generating":
+            # DB 仍为 generating 但本进程无任务：崩溃/线程异常残留，接管槽位
+            db.query(Project).filter(Project.id == project.id).update(
+                {"status": "generating", "pause_requested": 0},
+                synchronize_session=False,
+            )
+            db.commit()
+            project.status = "generating"
+            project.pause_requested = 0
+            logger.warning("接管残留生成槽位 project=%s", project.id)
+            return job_key
+
+        updated = (
+            db.query(Project)
+            .filter(Project.id == project.id, Project.status != "generating")
+            .update(
+                {"status": "generating", "pause_requested": 0},
+                synchronize_session=False,
+            )
+        )
+        if updated == 0:
+            db.rollback()
+            raise HTTPException(409, "批量生成进行中，请稍后再试")
+        db.commit()
+        project.status = "generating"
+        project.pause_requested = 0
+        return job_key
+    except Exception:
+        release_job(job_key)
+        raise
+
+
+def _spawn_generation(project_id: str, resume: bool, job_key: str) -> None:
+    started = spawn_async(
+        lambda: run_generation(project_id, resume),
+        name=f"{'resume' if resume else 'generate'}-{project_id}",
+        dedupe_key=job_key,
+        already_acquired=True,
+    )
+    if not started:
+        release_job(job_key)
+        raise HTTPException(409, "批量生成进行中，请稍后再试")
 
 
 def _require_format_confirmed(project: Project) -> None:
@@ -89,9 +139,9 @@ def start_generate(
         raise HTTPException(404, "项目不存在")
     _require_locked_outline(db, project_id)
     _require_format_confirmed(project)
-    _claim_generation_slot(project, db, "启动内容生成")
+    job_key = _claim_generation_slot(project, db, "启动内容生成")
     reset_queue(project_id)
-    spawn_async(lambda: run_generation(project_id, False), name=f"generate-{project_id}")
+    _spawn_generation(project_id, False, job_key)
     return {"success": True, "message": "生成任务已启动"}
 
 
@@ -115,9 +165,9 @@ def resume_generate(
         raise HTTPException(404, "项目不存在")
     _require_locked_outline(db, project_id)
     _require_format_confirmed(project)
-    _claim_generation_slot(project, db, "继续内容生成")
+    job_key = _claim_generation_slot(project, db, "继续内容生成")
     reset_queue(project_id)
-    spawn_async(lambda: run_generation(project_id, True), name=f"resume-{project_id}")
+    _spawn_generation(project_id, True, job_key)
     return {"success": True, "message": "生成任务已恢复"}
 
 

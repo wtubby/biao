@@ -49,46 +49,101 @@ function _extractBalanced(text, start, openCh, closeCh) {
   return null;
 }
 
+function _jsonBracketsFor(chartType, ch) {
+  if (chartType === 'ORG_DATA') return ch === '{' ? ['{', '}'] : null;
+  if (chartType === 'FLOW_DATA') return ch === '[' ? ['[', ']'] : null;
+  if (ch === '[') return ['[', ']'];
+  if (ch === '{') return ['{', '}'];
+  return null;
+}
+
+function _expandMarkdownFence(text, start, end) {
+  let i = start;
+  while (i > 0 && /[ \t]/.test(text[i - 1])) i -= 1;
+  if (i <= 0 || (text[i - 1] !== '\n' && text[i - 1] !== '\r')) return { start, end };
+  let lineEnd = i - 1;
+  if (lineEnd > 0 && text[lineEnd] === '\n' && text[lineEnd - 1] === '\r') lineEnd -= 1;
+  const lineStart = text.lastIndexOf('\n', lineEnd - 1) + 1;
+  const prevLine = text.slice(lineStart, lineEnd).trim();
+  if (!/^```[\w-]*[ \t]*$/.test(prevLine)) return { start, end };
+
+  let j = end;
+  while (j < text.length && /[ \t]/.test(text[j])) j += 1;
+  if (text[j] === '\r') j += 1;
+  if (text[j] === '\n') j += 1;
+  const closeEnd = text.indexOf('\n', j);
+  const closeLine = (closeEnd < 0 ? text.slice(j) : text.slice(j, closeEnd)).replace(/\r$/, '');
+  if (!/^[ \t]*```[ \t]*$/.test(closeLine)) return { start: lineStart, end };
+  return { start: lineStart, end: closeEnd < 0 ? text.length : closeEnd + 1 };
+}
+
 function* iterChartMatches(text) {
-  const headerRe = /\[(ORG_DATA|GANTT_DATA|TIMELINE_DATA|FLOW_DATA|SMART_DATA):/gi;
+  const colonRe = /\[(ORG_DATA|GANTT_DATA|TIMELINE_DATA|FLOW_DATA|SMART_DATA):/gi;
+  const blockRe = /\[(ORG_DATA|GANTT_DATA|TIMELINE_DATA|FLOW_DATA|SMART_DATA)\]/gi;
+  const closeRe = /\[\/(ORG_DATA|GANTT_DATA|TIMELINE_DATA|FLOW_DATA|SMART_DATA)\]/gi;
   let i = 0;
   while (i < text.length) {
     if (text[i] !== '[') {
       i += 1;
       continue;
     }
-    headerRe.lastIndex = i;
-    const header = headerRe.exec(text);
-    if (!header || header.index !== i) {
-      i += 1;
-      continue;
+    colonRe.lastIndex = i;
+    let header = colonRe.exec(text);
+    let requireOuterClose = true;
+    let chartType;
+    let j;
+    if (header && header.index === i) {
+      chartType = header[1].toUpperCase();
+      j = colonRe.lastIndex;
+    } else {
+      blockRe.lastIndex = i;
+      header = blockRe.exec(text);
+      if (!header || header.index !== i) {
+        i += 1;
+        continue;
+      }
+      chartType = header[1].toUpperCase();
+      j = blockRe.lastIndex;
+      requireOuterClose = false;
     }
-    const chartType = header[1].toUpperCase();
-    let j = headerRe.lastIndex;
     while (j < text.length && /\s/.test(text[j])) j += 1;
     if (j >= text.length) break;
-    const openCh = chartType === 'ORG_DATA' ? '{' : '[';
-    const closeCh = chartType === 'ORG_DATA' ? '}' : ']';
-    if (text[j] !== openCh) {
+    const brackets = _jsonBracketsFor(chartType, text[j]);
+    if (!brackets) {
       i += 1;
       continue;
     }
+    const [openCh, closeCh] = brackets;
     const extracted = _extractBalanced(text, j, openCh, closeCh);
     if (!extracted) {
       i += 1;
       continue;
     }
-    if (extracted.end >= text.length || text[extracted.end] !== ']') {
-      i += 1;
-      continue;
+    let end;
+    if (requireOuterClose) {
+      if (extracted.end >= text.length || text[extracted.end] !== ']') {
+        i += 1;
+        continue;
+      }
+      end = extracted.end + 1;
+    } else {
+      end = extracted.end;
+      let k = end;
+      while (k < text.length && /\s/.test(text[k])) k += 1;
+      closeRe.lastIndex = k;
+      const closeM = closeRe.exec(text);
+      if (closeM && closeM.index === k && closeM[1].toUpperCase() === chartType) {
+        end = closeM.index + closeM[0].length;
+      }
     }
+    const expanded = _expandMarkdownFence(text, i, end);
     yield {
-      index: i,
-      end: extracted.end + 1,
+      index: expanded.start,
+      end: expanded.end,
       chartType,
       rawJson: extracted.json,
     };
-    i = extracted.end + 1;
+    i = expanded.end;
   }
 }
 
@@ -115,6 +170,26 @@ function _smartTableHtml(data) {
   return `<table><thead><tr>${heads}</tr></thead><tbody><tr>${cells}</tr></tbody></table>`;
 }
 
+function _chartHtml(chartType, rawJson, caption, preview) {
+  if (chartType === 'SMART_DATA') {
+    try {
+      return _smartTableHtml(JSON.parse(rawJson)) + _captionHtml(caption);
+    } catch {
+      return _chartPlaceholderHtml(chartType, true);
+    }
+  }
+  if (preview && preview.image_base64) {
+    return (
+      `<div style="text-align:center"><img src="data:image/png;base64,${preview.image_base64}" style="max-width:100%;border:1px solid #eee;border-radius:4px" /></div>`
+      + _captionHtml(caption)
+    );
+  }
+  if (preview && !preview.image_base64) {
+    return _chartPlaceholderHtml(chartType, true);
+  }
+  return _chartPlaceholderHtml(chartType, false);
+}
+
 function useChartPreviews(content, durationDays, delay = 700) {
   const [previews, setPreviews] = useState([]);
   const timerRef = useRef(null);
@@ -122,7 +197,7 @@ function useChartPreviews(content, durationDays, delay = 700) {
 
   useEffect(() => {
     if (timerRef.current) clearTimeout(timerRef.current);
-    if (!content || !/\[(ORG_DATA|GANTT_DATA|TIMELINE_DATA|FLOW_DATA):/i.test(content)) {
+    if (!content || !/\[\/?(ORG_DATA|GANTT_DATA|TIMELINE_DATA|FLOW_DATA)/i.test(content)) {
       setPreviews([]);
       return;
     }
@@ -150,58 +225,46 @@ function useChartPreviews(content, durationDays, delay = 700) {
   return previews;
 }
 
-function renderMarkdownPreview(text, chartPreviews) {
-  if (!text) return { __html: '<p style="color:#999">暂无内容</p>' };
+function _resolvePreview(chartPreviews, matchIndex, order) {
+  const list = chartPreviews || [];
+  return list.find((p) => p.start === matchIndex) || list[order] || null;
+}
 
-  const previewByStart = new Map((chartPreviews || []).map((p) => [p.start, p]));
-  const captionByIndex = new Map();
-  const captionCounters = {};
-  for (const m of iterChartMatches(text)) {
-    captionByIndex.set(m.index, formatCaption(m.chartType, captionCounters));
-  }
-  let result = '';
-  let lastEnd = 0;
-  for (const m of iterChartMatches(text)) {
-    result += text.slice(lastEnd, m.index);
-    const { chartType, rawJson } = m;
-    const caption = previewByStart.get(m.index)?.caption || captionByIndex.get(m.index);
-
-    if (chartType === 'SMART_DATA') {
-      try {
-        const data = JSON.parse(rawJson);
-        result += _smartTableHtml(data);
-        result += _captionHtml(caption);
-      } catch {
-        result += _chartPlaceholderHtml(chartType, true);
-      }
-    } else {
-      const preview = previewByStart.get(m.index);
-      if (preview && preview.image_base64) {
-        result += `<div style="text-align:center"><img src="data:image/png;base64,${preview.image_base64}" style="max-width:100%;border:1px solid #eee;border-radius:4px" /></div>`;
-        result += _captionHtml(caption);
-      } else if (preview && !preview.image_base64) {
-        result += _chartPlaceholderHtml(chartType, true);
-      } else {
-        result += _chartPlaceholderHtml(chartType, false);
-      }
-    }
-    lastEnd = m.end;
-  }
-  result += text.slice(lastEnd);
-
-  const highlighted = result.replace(
+function _parseMarkdownSegment(segment) {
+  if (!segment) return '';
+  const highlighted = segment.replace(
     /\*\*\[参数\]\s*(.+?)\*\*/g,
-    '<span style="background:#fffbe6;border:1px solid #ffe58f;padding:0 4px;border-radius:2px;font-weight:bold">$1</span>'
+    '<span style="background:#fffbe6;border:1px solid #ffe58f;padding:0 4px;border-radius:2px;font-weight:bold">$1</span>',
   );
-  if (window.marked) {
-    return { __html: window.marked.parse(highlighted) };
-  }
-  const escaped = highlighted
+  if (window.marked) return window.marked.parse(highlighted);
+  return highlighted
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/\n/g, '<br>');
-  return { __html: escaped };
+}
+
+function renderMarkdownPreview(text, chartPreviews) {
+  if (!text) return { __html: '<p style="color:#999">暂无内容</p>' };
+
+  const matches = [...iterChartMatches(text)];
+  if (!matches.length) {
+    const html = _parseMarkdownSegment(text);
+    return { __html: html || '<p style="color:#999">暂无内容</p>' };
+  }
+
+  const captionCounters = {};
+  let html = '';
+  let lastEnd = 0;
+  matches.forEach((m, idx) => {
+    html += _parseMarkdownSegment(text.slice(lastEnd, m.index));
+    const preview = _resolvePreview(chartPreviews, m.index, idx);
+    const caption = preview?.caption || formatCaption(m.chartType, captionCounters);
+    html += _chartHtml(m.chartType, m.rawJson, caption, preview);
+    lastEnd = m.end;
+  });
+  html += _parseMarkdownSegment(text.slice(lastEnd));
+  return { __html: html };
 }
 export {
   CHART_CAPTIONS,

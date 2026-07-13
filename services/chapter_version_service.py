@@ -6,7 +6,8 @@ import difflib
 
 from sqlalchemy.orm import Session
 
-from db.models import ChapterVersion, TechOutline
+from db.models import ChapterVersion, Project, TechOutline
+from services.chapter_review_errors import dump_review_errors
 
 MAX_VERSIONS_PER_CHAPTER = 20
 
@@ -119,16 +120,28 @@ def compare_chapter_versions(
 
 
 def restore_chapter_version(db: Session, chapter: TechOutline, version_id: str) -> TechOutline:
+    """恢复历史正文后重新验章，不信任存档时的 review_status。
+
+    评分项绑定、内容边界、大纲结构等可能在存档后已变化，旧绿灯不能原样带入。
+    """
+    # 惰性导入：避免与 writer_service → archive_chapter_snapshot 循环依赖
+    from services.writer_service import review_chapter_content
+
     version = get_chapter_version(db, chapter.id, version_id)
     if not version:
         raise ValueError("版本不存在")
     archive_chapter_snapshot(db, chapter, "restore")
     chapter.generated_content = version.content
-    chapter.review_status = version.review_status or chapter.review_status
-    db.commit()
-    db.refresh(chapter)
-    return chapter
 
+    project = db.query(Project).filter(Project.id == chapter.project_id).first()
+    if not project:
+        chapter.review_status = "yellow"
+        chapter.review_errors = dump_review_errors(["已恢复历史版本，建议重新验章"])
+        db.commit()
+        db.refresh(chapter)
+        return chapter
+
+    return review_chapter_content(db, project, chapter)
 
 def _prune_old_versions(db: Session, chapter_id: str) -> None:
     rows = (

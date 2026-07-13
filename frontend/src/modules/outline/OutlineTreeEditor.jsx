@@ -1,10 +1,11 @@
 import {
+  useMemo,
   Button, Input, Select, Tag, Space, Spin, Popconfirm, Alert, Row, Col, Tree, Tooltip, Option, Text,
 } from '../../globals.js';
 
 import { KnowledgeFolderActions } from '../knowledge/KnowledgeFolderActions.jsx';
 import {
-  OutlineReviewBadge, buildOutlineTreeData,
+  OutlineReviewBadge, buildOutlineTreeData, computeOutlineNumberLabels,
 } from './helpers.jsx';
 
 function OutlineTreeEditor({
@@ -34,8 +35,24 @@ function OutlineTreeEditor({
   onSave,
   onSplitLeaf,
 }) {
+  const numberLabels = useMemo(() => computeOutlineNumberLabels(nodes), [nodes]);
+
+  const renderNumber = (nodeId) => {
+    const label = numberLabels.get(nodeId);
+    if (!label) return null;
+    return (
+      <Text
+        type="secondary"
+        style={{ fontFamily: 'Consolas, monospace', flexShrink: 0, minWidth: 56 }}
+      >
+        {label}
+      </Text>
+    );
+  };
+
   const treeData = buildOutlineTreeData(nodes, (n) => (
     <Space size="small">
+      {renderNumber(n.id)}
       <Text strong={n.is_leaf === 1}>{n.title}</Text>
       {n.expand_degraded && (
         <Tooltip title={n.expand_warning || '该分支 AI 展开失败，已降级为单叶子节点'}>
@@ -109,7 +126,10 @@ function OutlineTreeEditor({
             ) : !selectedLeaf ? (
               <div className="outline-leaf-detail-body">
                 <div className="outline-leaf-detail-title">
-                  <Text strong>父级章节</Text>
+                  <Space size="small" wrap>
+                    {renderNumber(selectedNode.id)}
+                    <Text strong>父级章节</Text>
+                  </Space>
                   <Text type="secondary" style={{ fontSize: 12 }}>仅可编辑标题；写作指导请选择叶子章节</Text>
                 </div>
                 <div className="outline-leaf-detail-field">
@@ -118,14 +138,17 @@ function OutlineTreeEditor({
                     size="small"
                     value={selectedNode.title}
                     onChange={(e) => onUpdateNode(selectedNode.id, { title: e.target.value })}
-                    placeholder="章节标题"
+                    placeholder="章节标题（不含编号，导出时自动加）"
                   />
                 </div>
               </div>
             ) : (
               <div className="outline-leaf-detail-body">
                 <div className="outline-leaf-detail-title">
-                  <Text strong>{selectedLeaf.title || '未命名章节'}</Text>
+                  <Space size="small" wrap>
+                    {renderNumber(selectedLeaf.id)}
+                    <Text strong>{selectedLeaf.title || '未命名章节'}</Text>
+                  </Space>
                   {selectedLeaf.target_words > 0 && (
                     <Text type="secondary" style={{ fontSize: 12 }}>
                       目标约 {selectedLeaf.target_words} 字
@@ -147,7 +170,7 @@ function OutlineTreeEditor({
                     size="small"
                     value={selectedLeaf.title}
                     onChange={(e) => onUpdateNode(selectedLeaf.id, { title: e.target.value })}
-                    placeholder="章节标题"
+                    placeholder="章节标题（不含编号，导出时自动加）"
                   />
                 </div>
                 <div className="outline-leaf-detail-field">

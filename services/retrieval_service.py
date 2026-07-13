@@ -162,10 +162,14 @@ def _sync_chunks_to_db(folder: str | None, db: Session) -> list[KnowledgeChunk]:
 
     raw_chunks = _load_chunks(folder)
     folder_key = folder or ""
-    existing = {
-        c.chunk_hash: c
-        for c in db.query(KnowledgeChunk).filter(KnowledgeChunk.folder_path == folder_key).all()
-    }
+    existing: dict[str, KnowledgeChunk] = {}
+    stale: list[KnowledgeChunk] = []
+    # 同 folder 下历史重复 hash：保留一条，其余标记待删（避免 dict 覆盖后永远清不掉）
+    for c in db.query(KnowledgeChunk).filter(KnowledgeChunk.folder_path == folder_key).all():
+        if c.chunk_hash in existing:
+            stale.append(c)
+        else:
+            existing[c.chunk_hash] = c
     seen_hashes: set[str] = set()
     result: list[KnowledgeChunk] = []
     to_embed: list[KnowledgeChunk] = []
@@ -189,10 +193,11 @@ def _sync_chunks_to_db(folder: str | None, db: Session) -> list[KnowledgeChunk]:
             keywords=raw.get("keywords"),
         )
         db.add(row)
+        existing[h] = row  # 同批后续相同 hash 复用，避免重复建行
         result.append(row)
         to_embed.append(row)
 
-    stale = [c for h, c in existing.items() if h not in seen_hashes]
+    stale.extend(c for h, c in existing.items() if h not in seen_hashes)
     for c in stale:
         db.delete(c)
     db.commit()

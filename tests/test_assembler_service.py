@@ -5,6 +5,7 @@ from docx import Document
 import re as _re
 
 from services.assembler_service import (
+    _compute_heading_emit_levels,
     _detect_list_style,
     _insert_chart,
     _insert_markdown_list,
@@ -85,6 +86,19 @@ def test_should_emit_heading_rules():
     assert _should_emit_heading(with_content) is True
 
 
+def test_compute_heading_emit_levels_skips_empty_containers():
+    from types import SimpleNamespace
+
+    chapters = [
+        SimpleNamespace(id="1", parent_id=None, level=1, is_leaf=0, generated_content=None),
+        SimpleNamespace(id="1.1", parent_id="1", level=2, is_leaf=0, generated_content=None),
+        SimpleNamespace(id="1.1.1", parent_id="1.1", level=3, is_leaf=1, generated_content="A"),
+        SimpleNamespace(id="1.1.2", parent_id="1.1", level=3, is_leaf=1, generated_content="B"),
+    ]
+    levels = _compute_heading_emit_levels(chapters)
+    assert levels == {"1": 1, "1.1.1": 2, "1.1.2": 2}
+
+
 def test_detect_list_style_bullet_and_number():
     assert _detect_list_style("- 第一项") == "List Bullet"
     assert _detect_list_style("1. 第一项") == "List Number"
@@ -125,6 +139,32 @@ def test_next_caption_number_increments_per_kind_independently():
     assert _next_caption_number(counters, "figure") == 1
     assert _next_caption_number(counters, "figure") == 2
     assert _next_caption_number(counters, "table") == 1
+
+
+def test_insert_chart_gantt_block_format_object():
+    """块格式 [GANTT_DATA]\\n{tasks:...} 应渲染为图片而非原文。"""
+    from chart.chart_service import CHART_PATTERN
+    from services.assembler_service import _write_content_in_order
+
+    content = """进度计划如下：
+
+```json
+[GANTT_DATA]
+{
+  "tasks": [
+    {"name": "基础施工", "start": 0, "end": 30},
+    {"name": "设备安装", "start": 30, "end": 90}
+  ]
+}
+```
+
+后续说明文字。"""
+    doc = Document()
+    _write_content_in_order(doc, content, 2, [], 180, {})
+    assert not any("GANTT_DATA" in p.text for p in doc.paragraphs)
+    assert len(doc.inline_shapes) == 1
+    captions = [p.text for p in doc.paragraphs if p.text.startswith("图")]
+    assert captions == ["图1 施工进度横道图"]
 
 
 def test_insert_chart_gantt_now_inserts_picture_not_table():

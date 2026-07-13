@@ -4,6 +4,8 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
 
 from config import get_cors_origins
 from db.database import init_db
@@ -29,6 +31,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+class _NoCacheFrontendMiddleware(BaseHTTPMiddleware):
+    """避免浏览器长期缓存 app.js / chunks，导致前端修复不生效。"""
+
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        path = request.url.path
+        if path in ("/", "/index.html") or path.endswith(".js") or path.startswith("/chunks/"):
+            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+            response.headers["Pragma"] = "no-cache"
+        return response
+
+
+app.add_middleware(_NoCacheFrontendMiddleware)
+
 app.include_router(project.router)
 app.include_router(parse.router)
 app.include_router(settings.router)
@@ -45,6 +62,11 @@ app.include_router(chart_preview.router)
 @app.on_event("startup")
 def on_startup():
     init_db()
+    from services.generation_service import recover_orphaned_generations
+
+    recovered = recover_orphaned_generations()
+    if recovered:
+        logger.warning("启动时已恢复 %d 个卡在 generating 的项目", recovered)
     checks = run_env_checks()
     logger.info("环境检查完成: %s", checks)
 
@@ -64,9 +86,14 @@ def env_status(recheck: bool = False):
 
 @app.get("/api/health")
 def health():
+    from chart.chart_service import iter_chart_matches
+
+    sample = '[GANTT_DATA]\n{"tasks":[{"name":"测试","start":0,"end":1}]}\n'
+    chart_parser_block_format = len(list(iter_chart_matches(sample))) == 1
     return {
         "status": "ok",
         "version": "5.0.0",
+        "chart_parser_block_format": chart_parser_block_format,
         "api_features": [
             "outline-catalog",
             "project-knowledge-folders",

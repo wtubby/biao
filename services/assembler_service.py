@@ -299,6 +299,27 @@ def _should_emit_heading(chapter: TechOutline) -> bool:
     return False
 
 
+def _compute_heading_emit_levels(chapters: list[TechOutline]) -> dict[str, int]:
+    """按实际输出的标题重算编号层级，跳过无内容中间节点时不留空号。"""
+    by_id = {ch.id: ch for ch in chapters}
+    levels: dict[str, int] = {}
+
+    def ancestor_emit_level(chapter: TechOutline) -> int:
+        parent_id = chapter.parent_id
+        while parent_id:
+            if parent_id in levels:
+                return levels[parent_id]
+            parent = by_id.get(parent_id)
+            parent_id = parent.parent_id if parent else None
+        return 0
+
+    for ch in chapters:
+        if not _should_emit_heading(ch):
+            continue
+        levels[ch.id] = ancestor_emit_level(ch) + 1
+    return levels
+
+
 def assemble_document(
     project: Project,
     chapters: list[TechOutline],
@@ -317,6 +338,7 @@ def assemble_document(
         for section in doc.sections:
             add_blind_bid_header(section, blind_header_text())
     heading_numbering = HeadingNumbering(doc, resolve_heading_numbering_preset(project))
+    emit_levels = _compute_heading_emit_levels(chapters)
     temp_files: list[Path] = []
     duration = project.duration_days or 90
     counters: dict = {}
@@ -334,15 +356,16 @@ def assemble_document(
             heading_title = ch.title
             if mark_yellow and ch.is_leaf == 1 and ch.review_status == "yellow":
                 heading_title = f"{ch.title}【待优化】"
+            emit_level = emit_levels.get(ch.id, ch.level)
             try:
-                heading_para = doc.add_heading(heading_title, level=min(ch.level, 4))
+                heading_para = doc.add_heading(heading_title, level=min(emit_level, 4))
             except Exception:
                 heading_para = doc.add_paragraph(heading_title, style=style)
-            heading_numbering.apply(heading_para, ch.level)
+            heading_numbering.apply(heading_para, emit_level)
 
             content = ch.generated_content or ""
             if content.strip():
-                _write_content_in_order(doc, content, ch.level, temp_files, duration, counters)
+                _write_content_in_order(doc, content, emit_level, temp_files, duration, counters)
 
         apply_professional_styles(doc)
         enable_auto_update_fields(doc)

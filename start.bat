@@ -85,7 +85,9 @@ for /f "tokens=2" %%a in ('wmic process where "CommandLine like '%%biao%%uvicorn
 echo.
 echo 服务启动中...
 echo   访问地址: http://localhost:%API_PORT%
-echo   按 Ctrl+C 可停止服务
+echo   启动后请确认: http://localhost:%API_PORT%/api/health
+echo   其中 chart_parser_block_format 应为 true（否则甘特图无法渲染）
+echo   按 Ctrl+%%C 可停止服务
 echo.
 
 start "" "http://localhost:%API_PORT%"

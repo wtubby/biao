@@ -18,6 +18,44 @@ from services.response_matrix_service import apply_matrix_coverage_to_leaves
 
 logger = logging.getLogger(__name__)
 
+_ORPHAN_INTERRUPT_MSG = "服务重启或生成任务异常中断，请继续生成"
+
+
+def recover_orphaned_generations(db=None) -> int:
+    """清理崩溃/重启后残留的 generating 状态。
+
+    将 project.status 回退为 outline_locked，并把仍卡在 generating 的叶子标为 red，
+    便于用户在重启后继续生成。返回恢复的项目数。
+    """
+    own_session = db is None
+    if own_session:
+        db = SessionLocal()
+    try:
+        projects = db.query(Project).filter(Project.status == "generating").all()
+        if not projects:
+            return 0
+        for project in projects:
+            project.status = "outline_locked"
+            project.pause_requested = 0
+            stuck = (
+                db.query(TechOutline)
+                .filter(
+                    TechOutline.project_id == project.id,
+                    TechOutline.is_leaf == 1,
+                    TechOutline.review_status == "generating",
+                )
+                .all()
+            )
+            for leaf in stuck:
+                leaf.review_status = "red"
+                leaf.review_errors = dump_review_errors([_ORPHAN_INTERRUPT_MSG])
+        db.commit()
+        logger.warning("已恢复 %d 个卡在 generating 的项目", len(projects))
+        return len(projects)
+    finally:
+        if own_session:
+            db.close()
+
 
 def _mark_leaves_red(db, leaf_ids: list[str], message: str) -> list[str]:
     """将仍卡在 generating 的叶子标为 red，返回实际变更的 chapter_id 列表。"""

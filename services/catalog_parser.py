@@ -27,8 +27,10 @@ def _detect_level(line: str, explicit_indent: int) -> tuple[int, str] | None:
     match = LEVEL2_NUM_RE.match(stripped)
     if match:
         num = match.group(1)
-        depth = num.count(".") + 1
-        return min(depth + 1, 4), _clean_title(match.group(2))
+        segments = [s for s in num.split(".") if s]
+        # 单段 "1." 视为二级；多段 "1.1" / "1.1.1" 段数即层级
+        level = 2 if len(segments) <= 1 else min(len(segments), 4)
+        return level, _clean_title(match.group(2))
 
     if explicit_indent >= 2:
         return 2, _clean_title(stripped)

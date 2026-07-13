@@ -156,12 +156,47 @@ def test_retrieve_falls_back_to_bm25_when_embedding_disabled(tmp_path, monkeypat
     assert miss.empty_reason == "no_match"
 
 
-def test_has_knowledge_sources_detects_txt_chunks(tmp_path, monkeypatch):
+def test_sync_chunks_dedupes_identical_text_across_files(tmp_path, monkeypatch):
+    """同一文件夹下多文件相同正文只建一条 KnowledgeChunk；再次同步仍保持一条。"""
+    from db.models import KnowledgeChunk
+    from services.retrieval_service import _load_chunks, _sync_chunks_to_db
+
     monkeypatch.setattr("services.retrieval_service.KNOWLEDGE_ROOT", str(tmp_path))
-    folder = tmp_path / "资料"
+    monkeypatch.setattr("services.embedding_service.embedding_available", lambda: False)
+    folder = tmp_path / "规范条文"
     folder.mkdir()
-    (folder / "note.txt").write_text("这是一段足够长的知识库文本内容，用于测试检索分片加载逻辑。\n\n" * 2, encoding="utf-8")
-    assert has_knowledge_sources("资料") is True
+    same = "接地电阻测试应在回填前完成，并按规范记录测量数据与验收结论。\n\n" * 2
+    (folder / "a.txt").write_text(same, encoding="utf-8")
+    (folder / "b.txt").write_text(same, encoding="utf-8")
+
+    init_db()
+    raw = _load_chunks("规范条文")
+    assert len(raw) >= 2
+    h = embedding_service.text_hash(raw[0]["text"])
+
+    db = SessionLocal()
+    try:
+        db.query(KnowledgeChunk).filter(KnowledgeChunk.folder_path == "规范条文").delete()
+        db.commit()
+
+        rows = _sync_chunks_to_db("规范条文", db)
+        assert (
+            db.query(KnowledgeChunk)
+            .filter(KnowledgeChunk.folder_path == "规范条文", KnowledgeChunk.chunk_hash == h)
+            .count()
+            == 1
+        )
+        assert {r.chunk_hash for r in rows} == {h}
+
+        _sync_chunks_to_db("规范条文", db)
+        assert (
+            db.query(KnowledgeChunk)
+            .filter(KnowledgeChunk.folder_path == "规范条文", KnowledgeChunk.chunk_hash == h)
+            .count()
+            == 1
+        )
+    finally:
+        db.close()
 
 
 def test_build_context_bundle_sets_retrieval_warning():

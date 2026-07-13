@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -22,20 +23,24 @@ def convert_docx_to_pdf(docx_path: Path, out_dir: Path | None = None) -> Path:
     soffice = shutil.which("soffice") or shutil.which("libreoffice")
     if soffice:
         try:
-            subprocess.run(
-                [
-                    soffice,
-                    "--headless",
-                    "--convert-to",
-                    "pdf",
-                    "--outdir",
-                    str(target_dir),
-                    str(src),
-                ],
-                check=True,
-                capture_output=True,
-                timeout=180,
-            )
+            # 每次独立 UserInstallation，避免并发抢共享 profile 锁
+            with tempfile.TemporaryDirectory(prefix="lo-profile-") as profile_dir:
+                user_installation = Path(profile_dir).resolve().as_uri()
+                subprocess.run(
+                    [
+                        soffice,
+                        "--headless",
+                        f"-env:UserInstallation={user_installation}",
+                        "--convert-to",
+                        "pdf",
+                        "--outdir",
+                        str(target_dir),
+                        str(src),
+                    ],
+                    check=True,
+                    capture_output=True,
+                    timeout=180,
+                )
             if pdf_path.exists():
                 return pdf_path
         except (subprocess.SubprocessError, OSError) as exc:
