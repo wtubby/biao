@@ -43,6 +43,7 @@ def rewrite_selection(
         ],
         max_tokens=2048,
         timeout=90.0,
+        role="writer",
     )
     new_text = raw.strip()
     if new_text.startswith("```"):

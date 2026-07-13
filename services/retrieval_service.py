@@ -12,9 +12,14 @@ import numpy as np
 from rank_bm25 import BM25Okapi
 from sqlalchemy.orm import Session
 
-from config import BM25_TOP_K, KNOWLEDGE_ROOT, RETRIEVAL_RRF_K
+from config import BM25_TOP_K, ENABLE_CHUNK_CONTEXT_PREFIX, KNOWLEDGE_ROOT, RETRIEVAL_RRF_K
 from db.models import KnowledgeChunk
 from services import embedding_service
+from services.chunk_context import (
+    build_chunk_context_prefix,
+    chunk_display_text,
+    chunk_embed_text,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -148,10 +153,19 @@ def _load_chunks(folder: str | None) -> list[dict]:
             body, keywords = _split_meta(para)
             if len(body) < 20:
                 continue
+            context_prefix = ""
+            if ENABLE_CHUNK_CONTEXT_PREFIX:
+                context_prefix = build_chunk_context_prefix(
+                    folder=folder,
+                    source_file=str(path.relative_to(root)),
+                    keywords=keywords,
+                    body=body,
+                )
             chunks.append({
                 "text": body,
                 "keywords": keywords,
                 "source": str(path.relative_to(root)),
+                "context_prefix": context_prefix,
             })
     return chunks
 
@@ -177,12 +191,18 @@ def _sync_chunks_to_db(folder: str | None, db: Session) -> list[KnowledgeChunk]:
     for raw in raw_chunks:
         h = embedding_service.text_hash(raw["text"])
         seen_hashes.add(h)
+        prefix = raw.get("context_prefix") if ENABLE_CHUNK_CONTEXT_PREFIX else ""
         if h in existing:
             row = existing[h]
             result.append(row)
+            changed = False
             if row.keywords != raw.get("keywords"):
                 row.keywords = raw.get("keywords")
-            if row.embedding is None or row.embedding_model != cfg.EMBEDDING_MODEL_PATH:
+                changed = True
+            if ENABLE_CHUNK_CONTEXT_PREFIX and row.context_prefix != prefix:
+                row.context_prefix = prefix
+                changed = True
+            if row.embedding is None or row.embedding_model != cfg.EMBEDDING_MODEL_PATH or changed:
                 to_embed.append(row)
             continue
         row = KnowledgeChunk(
@@ -191,6 +211,7 @@ def _sync_chunks_to_db(folder: str | None, db: Session) -> list[KnowledgeChunk]:
             chunk_hash=h,
             text=raw["text"],
             keywords=raw.get("keywords"),
+            context_prefix=prefix or None,
         )
         db.add(row)
         existing[h] = row  # 同批后续相同 hash 复用，避免重复建行
@@ -203,7 +224,9 @@ def _sync_chunks_to_db(folder: str | None, db: Session) -> list[KnowledgeChunk]:
     db.commit()
 
     if to_embed and embedding_service.embedding_available():
-        vecs = embedding_service.embed_texts([c.text for c in to_embed])
+        vecs = embedding_service.embed_texts([
+            chunk_embed_text(c.text, c.context_prefix) for c in to_embed
+        ])
         if vecs is not None:
             for c, v in zip(to_embed, vecs):
                 c.embedding = embedding_service.to_blob(v)
@@ -260,9 +283,11 @@ def _hybrid_select_indices(
     top_k: int,
     models: list[str | None] | None = None,
     search_texts: list[str] | None = None,
+    *,
+    use_vector: bool = True,
 ) -> list[int]:
     bm25_ranks = _bm25_rank_indices(search_texts or texts, query)
-    semantic_ranks = _semantic_rank_indices(embeddings, query, models)
+    semantic_ranks = _semantic_rank_indices(embeddings, query, models) if use_vector else []
     if semantic_ranks:
         merged = rrf_merge([bm25_ranks, semantic_ranks])
     else:
@@ -277,9 +302,13 @@ def _hybrid_select(
     top_k: int,
     models: list[str | None] | None = None,
     search_texts: list[str] | None = None,
+    *,
+    use_vector: bool = True,
 ) -> list[str]:
     indices = _hybrid_select_indices(
-        texts, embeddings, query, top_k, models, search_texts=search_texts
+        texts, embeddings, query, top_k, models,
+        search_texts=search_texts,
+        use_vector=use_vector,
     )
     return [texts[i] for i in indices]
 
@@ -339,6 +368,8 @@ def retrieve_detailed(
     top_k: int | None = None,
     project_id: str | None = None,
     db=None,
+    *,
+    use_vector: bool = True,
 ) -> RetrievalResult:
     top_k = top_k or BM25_TOP_K
     query_preview = (query or "")[:80]
@@ -367,7 +398,7 @@ def retrieve_detailed(
         if not chunk_rows:
             logger.info("检索为空（知识库无可用内容） folder=%s query=%s", folder, query_preview)
             return RetrievalResult([], empty_reason="knowledge_empty", knowledge_available=False)
-        texts = [c.text for c in chunk_rows]
+        texts = [chunk_display_text(c.text, c.context_prefix) for c in chunk_rows]
         sources = [
             f"{c.folder_path}/{c.source_file}".strip("/") if c.source_file else (c.folder_path or folder or "")
             for c in chunk_rows
@@ -375,9 +406,16 @@ def retrieve_detailed(
         keywords_list = [c.keywords or "" for c in chunk_rows]
         embeddings = [c.embedding for c in chunk_rows]
         models = [c.embedding_model for c in chunk_rows]
-        search_texts = [f"{t} {kw}".strip() for t, kw in zip(texts, keywords_list)]
+        embed_texts = [chunk_embed_text(c.text, c.context_prefix) for c in chunk_rows]
+        body_texts = [c.text for c in chunk_rows]
+        search_texts = [
+            f"{body} {prefix} {kw}".strip()
+            for body, prefix, kw in zip(body_texts, [c.context_prefix or "" for c in chunk_rows], keywords_list)
+        ]
         indices = _hybrid_select_indices(
-            texts, embeddings, query, top_k, models, search_texts=search_texts
+            embed_texts, embeddings, query, top_k, models,
+            search_texts=search_texts,
+            use_vector=use_vector,
         )
         results = [
             format_labeled_chunk(texts[i], sources[i], folder)
@@ -388,16 +426,26 @@ def retrieve_detailed(
         if not chunks:
             logger.info("检索为空（知识库无可用内容） folder=%s query=%s", folder, query_preview)
             return RetrievalResult([], empty_reason="knowledge_empty", knowledge_available=False)
-        texts = [c["text"] for c in chunks]
+        texts = [chunk_display_text(c["text"], c.get("context_prefix")) for c in chunks]
         sources = [c.get("source") or folder or "" for c in chunks]
         keywords_list = [c.get("keywords") or "" for c in chunks]
         embeddings: list[bytes | None] = [None] * len(texts)
+        embed_texts = [
+            chunk_embed_text(c["text"], c.get("context_prefix")) for c in chunks
+        ]
         if embedding_service.embedding_available():
-            vecs = embedding_service.embed_texts(texts)
+            vecs = embedding_service.embed_texts(embed_texts)
             if vecs is not None:
                 embeddings = [embedding_service.to_blob(v) for v in vecs]
-        search_texts = [f"{t} {kw}".strip() for t, kw in zip(texts, keywords_list)]
-        indices = _hybrid_select_indices(texts, embeddings, query, top_k, search_texts=search_texts)
+        search_texts = [
+            f"{c['text']} {c.get('context_prefix') or ''} {c.get('keywords') or ''}".strip()
+            for c in chunks
+        ]
+        indices = _hybrid_select_indices(
+            embed_texts, embeddings, query, top_k,
+            search_texts=search_texts,
+            use_vector=use_vector,
+        )
         results = [
             format_labeled_chunk(texts[i], sources[i], folder)
             for i in indices

@@ -15,6 +15,7 @@ from services.project_status import ALLOW_GENERATE, require_status
 from services.sse_manager import push_event, reset_queue
 from services.writer_service import group_leaves_by_section, write_and_qa_chapter
 from services.response_matrix_service import apply_matrix_coverage_to_leaves
+from services.outline_order import sort_outline_tree_dfs
 
 logger = logging.getLogger(__name__)
 
@@ -119,12 +120,11 @@ def _write_chapter_in_thread(
         if not project or not chapter:
             raise ValueError("项目或章节不存在")
 
-        section_leaves = (
-            db.query(TechOutline)
-            .filter(TechOutline.id.in_(section_leaf_ids))
-            .order_by(TechOutline.sort_order)
-            .all()
+        all_project_nodes = sort_outline_tree_dfs(
+            db.query(TechOutline).filter(TechOutline.project_id == project_id).all()
         )
+        id_set = set(section_leaf_ids)
+        section_leaves = [n for n in all_project_nodes if n.id in id_set]
         try:
             chapter, messages, retrieval_warning = write_and_qa_chapter(
                 db,
@@ -347,11 +347,8 @@ def generate_single_chapter(db, project_id: str, chapter_id: str):
             "请先确认投标文件格式：在「内容生成」页确认目录与格式后再生成",
         )
 
-    all_nodes = (
-        db.query(TechOutline)
-        .filter(TechOutline.project_id == ch.project_id)
-        .order_by(TechOutline.sort_order)
-        .all()
+    all_nodes = sort_outline_tree_dfs(
+        db.query(TechOutline).filter(TechOutline.project_id == ch.project_id).all()
     )
     leaves = [n for n in all_nodes if n.is_leaf == 1]
     groups = group_leaves_by_section(leaves, all_nodes)
@@ -407,11 +404,8 @@ async def run_generation(project_id: str, resume: bool = False) -> None:
             if not locked:
                 raise ValueError("大纲未锁定")
 
-            all_nodes = (
-                db.query(TechOutline)
-                .filter(TechOutline.project_id == project_id)
-                .order_by(TechOutline.sort_order)
-                .all()
+            all_nodes = sort_outline_tree_dfs(
+                db.query(TechOutline).filter(TechOutline.project_id == project_id).all()
             )
             leaves = [n for n in all_nodes if n.is_leaf == 1]
             if resume:

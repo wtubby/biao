@@ -2,19 +2,26 @@
 
 import logging
 import re
+from typing import TYPE_CHECKING, Any
 
 from config import (
-    KEY_CHAPTER_MIN_SCORE,
+    ENABLE_SEGMENT_QA,
     LONG_CHAPTER_MIN_KEY_POINTS,
     LONG_CHAPTER_WORD_THRESHOLD,
+    MAX_SEGMENT_QA_RETRY,
     SKIP_CONTENT_PLAN_WORD_THRESHOLD,
+    WRITER_STRUCTURED_OUTPUT,
 )
-from domains.registry import DEFAULT_DOMAIN
 from llm.llm_client import call_llm_json, call_llm_text
-from prompts.plan_prompt import build_plan_user_prompt, get_plan_system_prompt
+from llm.schemas import WriterOutputSchema
+from prompts.plan_prompt import (
+    build_plan_chat_messages,
+    build_plan_user_messages,
+)
 from prompts.writer_prompt import (
     SUMMARY_SYSTEM_PROMPT,
-    build_writer_user_prompt,
+    build_writer_chat_messages,
+    build_writer_user_messages,
     get_writer_system_prompt,
     sample_content_for_summary,
 )
@@ -23,21 +30,18 @@ from services.qa_rules import (
     fallback_content_plan,
     validate_content_plan,
 )
-from services.retrieval_service import retrieve_detailed
+from services.writer_output import structured_output_to_content
 from services.writing_guidance import should_skip_content_plan
+
+if TYPE_CHECKING:
+    from db.models import Project, TechOutline
 
 logger = logging.getLogger(__name__)
 
 
 def generate_content_plan(bundle: dict) -> dict:
-    domain = bundle.get("engineering_domain") or DEFAULT_DOMAIN
     try:
-        plan = call_llm_json(
-            [
-                {"role": "system", "content": get_plan_system_prompt(domain)},
-                {"role": "user", "content": build_plan_user_prompt(bundle)},
-            ]
-        )
+        plan = call_llm_json(build_plan_chat_messages(bundle), role="writer")
         if not isinstance(plan, dict):
             plan = {}
     except Exception as exc:
@@ -48,17 +52,9 @@ def generate_content_plan(bundle: dict) -> dict:
     if issues:
         logger.info("写作规划校验未通过，尝试重试: %s", issues)
         try:
-            retry_prompt = (
-                build_plan_user_prompt(bundle)
-                + "\n\n上次规划问题：\n"
-                + "\n".join(f"- {x}" for x in issues)
-                + "\n请输出修正后的完整 JSON。"
-            )
             plan2 = call_llm_json(
-                [
-                    {"role": "system", "content": get_plan_system_prompt(domain)},
-                    {"role": "user", "content": retry_prompt},
-                ]
+                build_plan_chat_messages(bundle, retry_issues=issues),
+                role="writer",
             )
             if isinstance(plan2, dict) and not validate_content_plan(plan2, bundle):
                 return plan2
@@ -126,27 +122,86 @@ def _chunk_key_points(key_points: list[str], max_groups: int = 3) -> list[list[s
 
 def _generate_once(
     bundle: dict,
-    user_prompt: str,
     *,
     max_tokens: int,
     chat_messages: list[dict] | None,
     use_chat: bool,
+    fix_instructions: str | None = None,
+    structured: bool | None = None,
 ) -> tuple[str, list[dict] | None]:
-    domain = bundle.get("engineering_domain") or DEFAULT_DOMAIN
+    if structured is None:
+        structured = WRITER_STRUCTURED_OUTPUT
+    domain = bundle.get("engineering_domain")
+
+    if structured:
+        return _generate_once_structured(
+            bundle,
+            max_tokens=max_tokens,
+            chat_messages=chat_messages,
+            use_chat=use_chat,
+            fix_instructions=fix_instructions,
+        )
+
     if use_chat:
         messages = list(chat_messages or [])
-        messages.append({"role": "user", "content": user_prompt})
-        content = call_llm_text(messages, max_tokens=max_tokens)
+        for part in build_writer_user_messages(bundle, fix_instructions=fix_instructions):
+            messages.append({"role": "user", "content": part})
+        content = call_llm_text(messages, max_tokens=max_tokens, role="writer")
         messages.append({"role": "assistant", "content": content})
         return content, messages
     content = call_llm_text(
-        [
-            {"role": "system", "content": get_writer_system_prompt(domain)},
-            {"role": "user", "content": user_prompt},
-        ],
+        build_writer_chat_messages(bundle, fix_instructions=fix_instructions, structured=False),
         max_tokens=max_tokens,
+        role="writer",
     )
     return content, chat_messages
+
+
+def _generate_once_structured(
+    bundle: dict,
+    *,
+    max_tokens: int,
+    chat_messages: list[dict] | None,
+    use_chat: bool,
+    fix_instructions: str | None = None,
+) -> tuple[str, list[dict] | None]:
+    """结构化 JSON 输出，组装为带图表占位符的正文。"""
+    domain = bundle.get("engineering_domain")
+    if use_chat:
+        messages = list(chat_messages or [])
+        if not messages or messages[0].get("role") != "system":
+            messages.insert(
+                0,
+                {"role": "system", "content": get_writer_system_prompt(domain, structured=True)},
+            )
+        for part in build_writer_user_messages(bundle, fix_instructions=fix_instructions):
+            messages.append({"role": "user", "content": part})
+        try:
+            raw = call_llm_json(
+                messages, max_tokens=max_tokens, role="writer", schema=WriterOutputSchema,
+            )
+            content = structured_output_to_content(raw)
+        except (ValueError, KeyError, TypeError) as exc:
+            logger.warning("结构化撰写失败，降级纯文本: %s", exc)
+            content = call_llm_text(messages, max_tokens=max_tokens, role="writer")
+        messages.append({"role": "assistant", "content": content})
+        return content, messages
+
+    messages = build_writer_chat_messages(
+        bundle, fix_instructions=fix_instructions, structured=True,
+    )
+    try:
+        raw = call_llm_json(
+            messages, max_tokens=max_tokens, role="writer", schema=WriterOutputSchema,
+        )
+        return structured_output_to_content(raw), chat_messages
+    except (ValueError, KeyError, TypeError) as exc:
+        logger.warning("结构化撰写失败，降级纯文本: %s", exc)
+        return call_llm_text(
+            build_writer_chat_messages(bundle, fix_instructions=fix_instructions, structured=False),
+            max_tokens=max_tokens,
+            role="writer",
+        ), chat_messages
 
 
 def generate_chapter_content(
@@ -154,6 +209,7 @@ def generate_chapter_content(
     fix_instructions: str | None = None,
     chat_messages: list[dict] | None = None,
     use_chat: bool = False,
+    qa_context: dict[str, Any] | None = None,
 ) -> tuple[str, list[dict] | None]:
     target_words = (bundle.get("guidance") or {}).get("target_words")
     max_tokens = estimate_chapter_max_tokens(target_words)
@@ -166,18 +222,16 @@ def generate_chapter_content(
             use_chat=use_chat,
             total_max_tokens=max_tokens,
             fix_instructions=fix_instructions,
+            qa_context=qa_context,
         )
         return content, messages
 
-    user_prompt = build_writer_user_prompt(bundle)
-    if fix_instructions:
-        user_prompt += f"\n\n## 修改要求\n{fix_instructions}"
     return _generate_once(
         bundle,
-        user_prompt,
         max_tokens=max_tokens,
         chat_messages=chat_messages,
         use_chat=use_chat,
+        fix_instructions=fix_instructions,
     )
 
 
@@ -188,21 +242,21 @@ def _generate_segmented_chapter(
     use_chat: bool,
     total_max_tokens: int,
     fix_instructions: str | None = None,
+    qa_context: dict[str, Any] | None = None,
 ) -> tuple[str, list[dict] | None]:
     """长章按规划要点分组撰写，降低后半段空洞与跑题。"""
+    from services.chapter_qa_orchestrator import _soft_issue_list, run_segment_qa
+
     plan = dict(bundle.get("content_plan") or {})
     key_points = [str(p).strip() for p in (plan.get("key_points") or []) if str(p).strip()]
     groups = _chunk_key_points(key_points)
     if len(groups) < 2:
-        user_prompt = build_writer_user_prompt(bundle)
-        if fix_instructions:
-            user_prompt += f"\n\n## 修改要求\n{fix_instructions}"
         return _generate_once(
             bundle,
-            user_prompt,
             max_tokens=total_max_tokens,
             chat_messages=chat_messages,
             use_chat=use_chat,
+            fix_instructions=fix_instructions,
         )
 
     target_words = int((bundle.get("guidance") or {}).get("target_words") or 0)
@@ -252,20 +306,52 @@ def _generate_segmented_chapter(
         seg_bundle["_segment_written"] = list(written)
         seg_bundle["_segment_remaining"] = remaining
 
-        user_prompt = build_writer_user_prompt(seg_bundle)
-        # QA 重试时每段都带完整修复清单，避免非首段“盲修”
+        fix_seg = None
         if fix_instructions:
-            user_prompt += (
-                f"\n\n## 修改要求（整章修复，各段均需落实）\n{fix_instructions}"
+            fix_seg = f"## 修改要求（整章修复，各段均需落实）\n{fix_instructions}"
+
+        part = ""
+        for seg_attempt in range(MAX_SEGMENT_QA_RETRY + 1):
+            content, messages = _generate_once(
+                seg_bundle,
+                max_tokens=per_tokens,
+                chat_messages=messages,
+                use_chat=use_chat,
+                fix_instructions=fix_seg,
             )
-        content, messages = _generate_once(
-            seg_bundle,
-            user_prompt,
-            max_tokens=per_tokens,
-            chat_messages=messages,
-            use_chat=use_chat,
-        )
-        part = (content or "").strip()
+            part = (content or "").strip()
+            if not part:
+                break
+
+            if (
+                ENABLE_SEGMENT_QA
+                and qa_context
+                and qa_context.get("project")
+                and qa_context.get("chapter")
+            ):
+                segment_label = f"第{idx + 1}/{len(groups)}段"
+                hard_errors, soft = run_segment_qa(
+                    part,
+                    qa_context["project"],
+                    qa_context["chapter"],
+                    bundle,
+                    segment_label=segment_label,
+                    content_plan=seg_plan,
+                )
+                soft_issues = _soft_issue_list(soft) if soft else []
+                issues = list(hard_errors) + soft_issues
+                if issues and seg_attempt < MAX_SEGMENT_QA_RETRY:
+                    fix_seg = "修复以下问题：\n" + "\n".join(issues)
+                    logger.info(
+                        "分段 QA 未通过，重写 %s（%d/%d）: %s",
+                        segment_label,
+                        seg_attempt + 1,
+                        MAX_SEGMENT_QA_RETRY,
+                        issues[:2],
+                    )
+                    continue
+            break
+
         if part:
             parts.append(part)
             written.extend(group)
@@ -314,15 +400,12 @@ def _generate_segmented_chapter(
             seg_bundle["_segment_total"] = len(groups)
             seg_bundle["_segment_written"] = prior_points
             seg_bundle["_segment_remaining"] = remaining
-            user_prompt = (
-                build_writer_user_prompt(seg_bundle) + f"\n\n## 修改要求\n{fix_seg}"
-            )
             rewritten, messages = _generate_once(
                 seg_bundle,
-                user_prompt,
                 max_tokens=per_tokens,
                 chat_messages=messages,
                 use_chat=use_chat,
+                fix_instructions=fix_seg,
             )
             if (rewritten or "").strip():
                 parts[fix_idx] = rewritten.strip()
@@ -338,6 +421,7 @@ def generate_summary(content: str) -> str:
             {"role": "user", "content": sampled},
         ],
         max_tokens=300,
+        role="writer",
     ).strip()[:150]
 
 

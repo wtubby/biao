@@ -34,6 +34,8 @@ from services.requirement_prompt import (
     requirements_response_hint,
 )
 from services.response_matrix_service import format_chapter_matrix_context
+from services.outline_order import sort_leaves_by_dfs, sort_outline_tree_dfs
+from services.retrieval_router import resolve_retrieval_route
 from services.retrieval_service import RetrievalResult, build_retrieval_warning, retrieve_detailed
 from services.writing_guidance import (
     default_content_boundary_for_title,
@@ -115,7 +117,7 @@ def _default_content_boundary(chapter: TechOutline, sibling_titles: list[str]) -
 def group_leaves_by_section(leaves: list[TechOutline], all_nodes: list[TechOutline]) -> list[list[TechOutline]]:
     node_map = {n.id: n for n in all_nodes}
     groups: dict[str, list[TechOutline]] = {}
-    for leaf in sorted(leaves, key=lambda x: x.sort_order):
+    for leaf in sort_leaves_by_dfs(leaves, all_nodes):
         root_id = _root_ancestor_id(leaf, node_map)
         groups.setdefault(root_id, []).append(leaf)
     return list(groups.values())
@@ -145,11 +147,8 @@ def build_context_bundle(
     req_text = format_requirements_text(requirements)
     req_hint = requirements_response_hint(requirements)
 
-    all_nodes = (
-        db.query(TechOutline)
-        .filter(TechOutline.project_id == project.id)
-        .order_by(TechOutline.sort_order)
-        .all()
+    all_nodes = sort_outline_tree_dfs(
+        db.query(TechOutline).filter(TechOutline.project_id == project.id).all()
     )
     path_parts = []
     current = chapter
@@ -174,8 +173,28 @@ def build_context_bundle(
             query_parts.append((r.source_text or "")[:400])
     query = " ".join(p for p in query_parts if p).strip()
     gen_config = get_generation_config(project)
+    retrieval_route = resolve_retrieval_route(
+        chapter_title=chapter.title,
+        requirements=requirements,
+        guidance=guidance_preview,
+    )
     if gen_config.get("use_knowledge_library", True):
-        retrieval = retrieve_detailed(query, chapter.bound_folder, project_id=project.id, db=db)
+        logger.info(
+            "检索路由 chapter=%s mode=%s top_k=%d vector=%s (%s)",
+            chapter.title,
+            retrieval_route.mode,
+            retrieval_route.top_k,
+            retrieval_route.use_vector,
+            retrieval_route.reason,
+        )
+        retrieval = retrieve_detailed(
+            query,
+            chapter.bound_folder,
+            project_id=project.id,
+            db=db,
+            top_k=retrieval_route.top_k,
+            use_vector=retrieval_route.use_vector,
+        )
         chunks = retrieval.chunks
     else:
         retrieval = RetrievalResult(chunks=[], empty_reason="已关闭自有知识库")
@@ -212,11 +231,11 @@ def build_context_bundle(
         summary_pool = section_leaves
     else:
         summary_pool = all_leaf_nodes
-    last_summary = _get_prev_summary(summary_pool, chapter)
+    last_summary = _get_prev_summary(summary_pool, chapter, all_nodes)
     if not last_summary and entry_summary and section_leaves and chapter.id == section_leaves[0].id:
         last_summary = entry_summary
-    prior_summaries = _collect_prior_summaries(summary_pool, chapter, limit=5)
-    prior_contents = _collect_prior_contents(summary_pool, chapter, limit=3)
+    prior_summaries = _collect_prior_summaries(summary_pool, chapter, all_nodes, limit=5)
+    prior_contents = _collect_prior_contents(summary_pool, chapter, all_nodes, limit=3)
     immediate_prior_title, immediate_prior_body = _get_immediate_prior_sibling(chapter, all_nodes)
     overview = (meta.get("extra_notes") or "").strip() or None
     global_params = build_prompt_global_params(project)
@@ -272,6 +291,7 @@ def build_context_bundle(
         "evaluation_focus": evaluation_focus,
         "writing_guide_excerpt": writing_guide_excerpt,
         "retrieval_text": "\n\n---\n\n".join(chunks),
+        "retrieval_route": retrieval_route.to_dict(),
         "retrieval_warning": retrieval_warning,
         "empty_retrieval_hint": empty_retrieval_hint,
         "last_summary": last_summary,
@@ -304,8 +324,10 @@ def build_context_bundle(
     return bundle
 
 
-def _get_prev_summary(leaves: list[TechOutline], current: TechOutline) -> str | None:
-    ordered = sorted(leaves, key=lambda x: x.sort_order)
+def _get_prev_summary(
+    leaves: list[TechOutline], current: TechOutline, all_nodes: list[TechOutline],
+) -> str | None:
+    ordered = sort_leaves_by_dfs(leaves, all_nodes)
     for i, leaf in enumerate(ordered):
         if leaf.id == current.id and i > 0:
             return ordered[i - 1].last_summary
@@ -313,9 +335,9 @@ def _get_prev_summary(leaves: list[TechOutline], current: TechOutline) -> str | 
 
 
 def _collect_prior_summaries(
-    leaves: list[TechOutline], current: TechOutline, *, limit: int = 5
+    leaves: list[TechOutline], current: TechOutline, all_nodes: list[TechOutline], *, limit: int = 5,
 ) -> list[str]:
-    ordered = sorted(leaves, key=lambda x: x.sort_order)
+    ordered = sort_leaves_by_dfs(leaves, all_nodes)
     collected: list[str] = []
     for leaf in ordered:
         if leaf.id == current.id:
@@ -327,9 +349,9 @@ def _collect_prior_summaries(
 
 
 def _collect_prior_contents(
-    leaves: list[TechOutline], current: TechOutline, *, limit: int = 3
+    leaves: list[TechOutline], current: TechOutline, all_nodes: list[TechOutline], *, limit: int = 3,
 ) -> list[str]:
-    ordered = sorted(leaves, key=lambda x: x.sort_order)
+    ordered = sort_leaves_by_dfs(leaves, all_nodes)
     collected: list[str] = []
     for leaf in ordered:
         if leaf.id == current.id:
@@ -357,8 +379,21 @@ def _enrich_retrieval_with_plan(
     if not gen_config.get("use_knowledge_library", True):
         return
     query = " ".join([chapter.title or "", *focus])
+    followup_route = resolve_retrieval_route(
+        chapter_title=chapter.title,
+        guidance=bundle.get("guidance"),
+        content_plan=plan,
+        is_plan_followup=True,
+    )
     try:
-        extra = retrieve_detailed(query, chapter.bound_folder, project_id=project.id, db=db)
+        extra = retrieve_detailed(
+            query,
+            chapter.bound_folder,
+            project_id=project.id,
+            db=db,
+            top_k=followup_route.top_k,
+            use_vector=followup_route.use_vector,
+        )
     except Exception as exc:
         logger.warning("规划二次检索失败: %s", exc)
         return
@@ -389,7 +424,7 @@ def _init_key_chapter_messages(
         .filter(TechRequirement.project_id == project.id, TechRequirement.status == "confirmed")
         .all()
     )
-    outline_titles = [n.title for n in sorted(all_nodes, key=lambda x: x.sort_order)]
+    outline_titles = [n.title for n in all_nodes]
     init_prompt = build_key_chapter_init_prompt(
         project, all_reqs or requirements, outline_titles, domain, overview=overview,
     )

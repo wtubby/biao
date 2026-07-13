@@ -21,6 +21,7 @@ from llm.llm_client import call_llm_json
 from prompts.outline_split_prompt import build_split_user_prompt, get_split_system_prompt
 from services.generation_mode import get_generation_mode
 from services.outline_boundary_rules import sanitize_leaf_content_boundaries
+from services.outline_order import reorder_outline_dict_nodes, sort_outline_tree_dfs
 from services.outline_service import (
     _global_engineering_info,
     _outline_rows_to_enrich_nodes,
@@ -271,31 +272,6 @@ def call_structured_split(
     return validate_split_nodes(raw, allowed_req_ids=allowed)
 
 
-def _reorder_outline_nodes(nodes: list[dict]) -> list[dict]:
-    id_map = {str(n["id"]): dict(n) for n in nodes}
-    children: dict[str | None, list[str]] = {}
-    for n in nodes:
-        pid = n.get("parent_id")
-        children.setdefault(pid, []).append(str(n["id"]))
-    for ids in children.values():
-        ids.sort(key=lambda i: (id_map[i].get("sort_order") or 0, i))
-
-    ordered: list[dict] = []
-
-    def visit(parent_id: str | None, level: int) -> None:
-        for nid in children.get(parent_id, []):
-            node = id_map[nid]
-            node["level"] = level
-            ordered.append(node)
-            if not node.get("is_leaf"):
-                visit(nid, level + 1)
-
-    visit(None, 1)
-    for i, node in enumerate(ordered, start=1):
-        node["sort_order"] = i
-    return ordered
-
-
 def apply_leaf_split(
     nodes: list[dict],
     leaf_id: str,
@@ -350,7 +326,7 @@ def apply_leaf_split(
     merged = [n for n in nodes if str(n.get("id")) != leaf_id]
     merged.append(leaf)
     merged.extend(new_children)
-    merged = _reorder_outline_nodes(merged)
+    merged = reorder_outline_dict_nodes(merged)
     sanitized, _ = sanitize_leaf_content_boundaries(merged)
     return sanitized
 
@@ -362,11 +338,8 @@ def split_long_leaves(
     leaf_id: str | None = None,
     threshold: int | None = None,
 ) -> dict:
-    rows = (
-        db.query(TechOutline)
-        .filter(TechOutline.project_id == project.id)
-        .order_by(TechOutline.sort_order)
-        .all()
+    rows = sort_outline_tree_dfs(
+        db.query(TechOutline).filter(TechOutline.project_id == project.id).all()
     )
     if any(r.is_locked for r in rows):
         raise ValueError("大纲已锁定，无法拆分。请在大纲锁定前完成结构拆分。")

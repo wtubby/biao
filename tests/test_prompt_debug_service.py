@@ -16,6 +16,8 @@ from services.prompt_debug_service import (
     _first_branch_from_catalog,
     build_chapter_prompt_preview,
     build_outline_prompt_preview,
+    capture_generation_prompt_debug,
+    parse_stored_prompt_debug,
 )
 
 
@@ -150,9 +152,38 @@ def test_chapter_prompt_preview_includes_content_plan_in_writer():
         qa_stage = next(s for s in preview["stages"] if s["id"] == "qa")
         assert "本章写作规划" in writer_stage["user"]
         assert "里程碑节点" in writer_stage["user"]
-        assert "写作规划必须覆盖要点" in qa_stage["user"]
+        assert "本章写作规划预期覆盖要点" in qa_stage["user"]
         assert "关键路径" in qa_stage["user"]
         assert preview.get("prompt_metrics", {}).get("total_tokens_est", 0) > 0
         assert writer_stage.get("metrics", {}).get("user_tokens_est", 0) > 0
     finally:
         db.close()
+
+
+def test_capture_generation_prompt_debug_includes_retrieval_route():
+    chapter = TechOutline(
+        id="c-route",
+        project_id="p1",
+        title="工程概况",
+        level=2,
+        sort_order=1,
+        is_leaf=1,
+    )
+    bundle = {
+        "engineering_domain": "电力工程",
+        "chapter_title": "工程概况",
+        "guidance": {"brief": "写概况", "content_boundary": "只写概况", "target_words": 400},
+        "requirements_text": "",
+        "retrieval_route": {
+            "mode": "light",
+            "top_k": 3,
+            "use_vector": False,
+            "reason": "概况/目标类章节，轻量 BM25",
+        },
+        "retrieval_warning": "测试警告",
+    }
+    raw = capture_generation_prompt_debug(bundle, chapter)
+    data = parse_stored_prompt_debug(raw)
+    assert data["retrieval_route"]["mode"] == "light"
+    assert data["retrieval_route"]["top_k"] == 3
+    assert data["retrieval_warning"] == "测试警告"

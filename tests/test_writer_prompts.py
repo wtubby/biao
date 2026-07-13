@@ -1,8 +1,17 @@
 """正文/规划 Prompt 与摘要采样单元测试。"""
 
-from prompts.plan_prompt import build_plan_user_prompt
+from prompts.plan_prompt import (
+    build_plan_chat_messages,
+    build_plan_user_messages,
+    build_plan_user_prompt,
+)
 from prompts.qa_prompt import build_qa_user_prompt
-from prompts.writer_prompt import build_writer_user_prompt, sample_content_for_summary
+from prompts.writer_prompt import (
+    build_writer_chat_messages,
+    build_writer_user_messages,
+    build_writer_user_prompt,
+    sample_content_for_summary,
+)
 
 
 def _base_bundle(**overrides):
@@ -41,6 +50,18 @@ def _base_bundle(**overrides):
     }
     bundle.update(overrides)
     return bundle
+
+
+def test_writer_user_messages_split_for_cache():
+    parts = build_writer_user_messages(_base_bundle())
+    assert len(parts) >= 3
+    assert parts[0].startswith("## 全局工程信息")
+    assert "## 检索素材" in parts[2] or any("## 检索素材" in p for p in parts)
+    assert parts[-1].startswith("## 本章评分项") or "## 章节定位" in parts[-1]
+    chat = build_writer_chat_messages(_base_bundle())
+    assert chat[0]["role"] == "system"
+    assert sum(1 for m in chat if m["role"] == "user") == len(parts)
+    assert build_writer_user_prompt(_base_bundle()) == "\n\n".join(parts)
 
 
 def test_writer_prompt_includes_other_leaves_and_overview():
@@ -97,6 +118,17 @@ def test_writer_prompt_includes_retrieval_warning():
 def test_writer_prompt_omits_empty_overview():
     prompt = build_writer_user_prompt(_base_bundle(project_overview=None))
     assert "项目概况（全书背景" not in prompt
+
+
+def test_plan_user_messages_split_for_cache():
+    parts = build_plan_user_messages(_base_bundle())
+    assert len(parts) >= 3
+    assert parts[0].startswith("## 全局工程信息")
+    assert any("## 检索素材" in p for p in parts)
+    chat = build_plan_chat_messages(_base_bundle())
+    assert chat[0]["role"] == "system"
+    assert sum(1 for m in chat if m["role"] == "user") == len(parts)
+    assert build_plan_user_prompt(_base_bundle()) == "\n\n".join(parts)
 
 
 def test_plan_prompt_includes_matrix_context():

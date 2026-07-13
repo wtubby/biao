@@ -216,6 +216,7 @@ def generate_chapter(project_id: str, chapter_id: str, db: Session = Depends(get
         "review_status": chapter.review_status,
         "generated_content": chapter.generated_content,
         "retrieval_warning": (debug or {}).get("retrieval_warning"),
+        "retrieval_route": (debug or {}).get("retrieval_route"),
     }
 
 

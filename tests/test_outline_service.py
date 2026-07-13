@@ -3,10 +3,13 @@
 import json
 from unittest.mock import patch
 
+from prompts.outline_prompt import build_branch_user_prompt
 from services.outline_service import (
+    _ensure_unique_outline_ids,
     _fallback_branch_leaf,
     _guess_bound_folder,
     _match_requirements_for_title,
+    _sanitize_branch_expand_nodes,
     enrich_outline_nodes,
     generate_outline_skeleton,
     _expand_branch,
@@ -53,6 +56,22 @@ def test_generate_outline_skeleton_raises_without_level1():
             assert False, "应抛出 ValueError"
         except ValueError:
             pass
+
+
+def test_build_branch_user_prompt_includes_other_branches():
+    branch = {"id": "2.1", "title": "土建工程", "parent_id": "2", "level": 2}
+    others = [
+        {"id": "2.2", "title": "电气安装工程", "parent_id": "2"},
+        {"id": "2.3", "title": "调试试验", "parent_id": "2"},
+    ]
+    prompt = build_branch_user_prompt(
+        _GLOBAL_INFO, branch, _CATALOG, [], [], other_branches=others,
+    )
+    assert "<other_branches>" in prompt
+    assert "电气安装工程" in prompt
+    assert "调试试验" in prompt
+    other_block = prompt.split("<other_branches>")[1].split("</other_branches>")[0]
+    assert "土建工程" not in other_block
 
 
 def test_expand_branch_no_split_returns_branch_itself():
@@ -235,3 +254,45 @@ def test_enrich_outline_nodes_shared_requirement_not_double_counted():
     assert sum(words) <= total_budget + 3
     # 旧逻辑会对每个叶子各给 100% 预算，总和约 3 倍
     assert sum(words) < total_budget * 1.5
+
+
+def test_sanitize_branch_expand_nodes_renames_wrong_prefix_ids():
+    branch = {"id": "2.1", "title": "土建工程", "parent_id": "2", "level": 2}
+    nodes = [
+        {"id": "1.1", "title": "基础", "parent_id": "1", "level": 3, "is_leaf": 1},
+        {"id": "1.2", "title": "构支架", "parent_id": "1", "level": 3, "is_leaf": 1},
+    ]
+    fixed, warnings = _sanitize_branch_expand_nodes(branch, nodes, used_ids={"1", "2"})
+    assert [n["id"] for n in fixed] == ["2.1.1", "2.1.2"]
+    assert all(n["parent_id"] == "2.1" for n in fixed)
+    assert warnings
+
+
+def test_sanitize_branch_expand_nodes_avoids_cross_branch_id_collision():
+    branch_a = {"id": "2.1", "title": "土建", "parent_id": "2", "level": 2}
+    branch_b = {"id": "2.2", "title": "电气", "parent_id": "2", "level": 2}
+    occupied = {"1", "2"}
+    nodes_a, _ = _sanitize_branch_expand_nodes(
+        branch_a,
+        [{"id": "1.1", "title": "A", "parent_id": "1", "level": 3, "is_leaf": 1}],
+        used_ids=occupied,
+    )
+    nodes_b, _ = _sanitize_branch_expand_nodes(
+        branch_b,
+        [{"id": "1.1", "title": "B", "parent_id": "1", "level": 3, "is_leaf": 1}],
+        used_ids=occupied,
+    )
+    all_ids = [nodes_a[0]["id"], nodes_b[0]["id"]]
+    assert len(set(all_ids)) == 2
+    assert all_ids == ["2.1.1", "2.2.1"]
+
+
+def test_ensure_unique_outline_ids_renames_global_duplicates():
+    nodes = [
+        {"id": "1", "title": "概述", "parent_id": None, "level": 1},
+        {"id": "1", "title": "重复", "parent_id": "1", "level": 2},
+    ]
+    fixed, warnings = _ensure_unique_outline_ids(nodes)
+    assert fixed[0]["id"] == "1"
+    assert fixed[1]["id"] != "1"
+    assert warnings

@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from db.models import Project, TechRequirement
 from llm.llm_client import call_llm_json
-from prompts.extraction_prompt import build_extraction_user_prompt, get_extraction_system_prompt
+from prompts.extraction_prompt import build_extraction_chat_messages
 from services.blind_bid_service import detect_blind_bid
 from services.document_parser import ParsedContent, ParsedItem, parse_document
 from services.facts_service import prefill_facts_from_extraction
@@ -158,17 +158,11 @@ def _ensure_bid_reference_catalog(result: dict, items: list[ParsedItem]) -> None
 
 
 def _extract_single_chunk(items: list[ParsedItem], page_hint: str | None = None) -> dict:
-    user_content = build_extraction_user_prompt(
+    messages = build_extraction_chat_messages(
         _annotate_pages(items, "table"),
         _annotate_pages(items, "paragraph"),
+        page_hint=page_hint,
     )
-    if page_hint:
-        user_content += f"\n\n（本段原文范围：{page_hint}）"
-
-    messages = [
-        {"role": "system", "content": get_extraction_system_prompt()},
-        {"role": "user", "content": user_content},
-    ]
     return call_llm_json(
         messages,
         max_tokens=12000,

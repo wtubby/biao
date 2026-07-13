@@ -2,7 +2,7 @@
 
 from types import SimpleNamespace
 
-from services.outline_order import sort_outline_tree_dfs
+from services.outline_order import reorder_outline_dict_nodes, sort_outline_tree_dfs
 
 
 def _node(id_, parent_id, sort_order, title=""):
@@ -33,3 +33,15 @@ def test_sort_outline_tree_dfs_respects_sibling_sort_order():
     ]
     ordered = sort_outline_tree_dfs(chapters)
     assert [c.id for c in ordered] == ["2", "2.1", "2.2", "1"]
+
+
+def test_reorder_outline_dict_nodes_assigns_global_sort_order():
+    nodes = [
+        {"id": "1", "parent_id": None, "level": 1, "is_leaf": 0, "sort_order": 1, "title": "A"},
+        {"id": "2", "parent_id": None, "level": 1, "is_leaf": 0, "sort_order": 2, "title": "B"},
+        {"id": "1.1", "parent_id": "1", "level": 2, "is_leaf": 1, "sort_order": 1, "title": "A1"},
+        {"id": "2.1", "parent_id": "2", "level": 2, "is_leaf": 1, "sort_order": 1, "title": "B1"},
+    ]
+    ordered = reorder_outline_dict_nodes(nodes)
+    assert [n["id"] for n in ordered] == ["1", "1.1", "2", "2.1"]
+    assert [n["sort_order"] for n in ordered] == [1, 2, 3, 4]

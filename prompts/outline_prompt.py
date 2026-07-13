@@ -1,7 +1,6 @@
 import json
 
 from services.generation_mode import GENERATION_MODE_FULL, branch_mode_hint, skeleton_mode_hint
-from services.knowledge_registry import get_knowledge_folders
 
 # ---------------------------------------------------------------------------
 # 行业参考结构 — 骨架生成时供模型参考，非强制模板
@@ -197,6 +196,10 @@ BRANCH_SYSTEM_PROMPT = """## TASK
 - 你只看到当前分支，但 all_requirements 列出了全部评分项；若某评分项与当前分支内容勉强相关，且在大纲中无更合适的章节承载，请在本分支下建立对应子节予以覆盖，避免标书漏项
 - 优先绑定与本分支语义强相关的评分项；不要为了独占绑定而与其他分支争抢同一 requirement_id
 
+### 跨分支去重
+- 用户消息中的 `<other_branches>` 列出同级其他二级分支，其主题已由并行展开任务占用
+- 本分支子节点标题与 content_boundary 不得复述、抢占这些分支的专业范围
+
 %LEAF_RULES%
 
 ### 篇幅控制
@@ -225,6 +228,19 @@ def get_branch_system_prompt(engineering_domain: str | None = None) -> str:
     )
 
 
+def _format_other_branches(other_branches: list[dict] | None) -> str:
+    lines: list[str] = []
+    for item in other_branches or []:
+        title = str(item.get("title") or "").strip()
+        if not title:
+            continue
+        bid = str(item.get("id") or "").strip()
+        lines.append(f"- {bid} {title}" if bid else f"- {title}")
+    if not lines:
+        return "（无其他同级二级分支）"
+    return "\n".join(lines)
+
+
 def build_branch_user_prompt(
     global_info: dict,
     branch: dict,
@@ -233,10 +249,12 @@ def build_branch_user_prompt(
     knowledge_folders: list[str] | None = None,
     *,
     generation_mode: str | None = None,
+    other_branches: list[dict] | None = None,
 ) -> str:
     mode = generation_mode or GENERATION_MODE_FULL
     risk_text, req_text = _format_requirements(requirements)
     catalog_text = _format_catalog(catalog)
+    other_branches_text = _format_other_branches(other_branches)
     folder_hint = "、".join(knowledge_folders or []) or "无"
     mode_hint = branch_mode_hint(mode)
     return f"""请判断并展开下方分支节点。
@@ -252,6 +270,11 @@ def build_branch_user_prompt(
 <branch>
 id={branch['id']}，标题「{branch['title']}」，parent_id={branch.get('parent_id')}，level={branch.get('level')}
 </branch>
+
+<other_branches>
+以下同级二级分支已由其他展开任务占用；本分支子节点不得重复其主题或专业范围：
+{other_branches_text}
+</other_branches>
 
 <原始用户目录（参考，若本分支在其中已有更细标题必须保留）>
 {catalog_text}
@@ -271,10 +294,11 @@ id={branch['id']}，标题「{branch['title']}」，parent_id={branch.get('paren
 
 执行要求：
 1. 只判断和展开「{branch['title']}」这一个分支，不要输出其他分支内容
-2. 判断该分支是否需要向下拆分（见系统提示规则）
-3. 若拆分，新增子节点 id 以 "{branch['id']}." 为前缀
-4. 若 all_requirements 中有评分项与当前分支勉强相关且无更合适的章节承载，请在本分支下建立子节覆盖，避免漏项
-5. 仅输出 JSON"""
+2. 子节点标题与 content_boundary 不得与 <other_branches> 中列出的分支主题重复或抢占
+3. 判断该分支是否需要向下拆分（见系统提示规则）
+4. 若拆分，新增子节点 id 以 "{branch['id']}." 为前缀
+5. 若 all_requirements 中有评分项与当前分支勉强相关且无更合适的章节承载，请在本分支下建立子节覆盖，避免漏项
+6. 仅输出 JSON"""
 
 
 def _format_requirements(requirements: list[dict]) -> tuple[str, str]:

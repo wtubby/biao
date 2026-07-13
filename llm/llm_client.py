@@ -3,7 +3,7 @@ import logging
 import random
 import re
 import time
-from typing import Any
+from typing import Any, Literal
 
 from openai import (
     APIConnectionError,
@@ -12,12 +12,20 @@ from openai import (
     OpenAI,
     RateLimitError,
 )
+from pydantic import BaseModel, ValidationError
 
 logger = logging.getLogger(__name__)
+
+LLMRole = Literal["default", "writer", "qa"]
 
 _RETRYABLE_EXCEPTIONS = (APIConnectionError, APITimeoutError, RateLimitError)
 
 _client: OpenAI | None = None
+_cache_stats: dict[str, int] = {
+    "prompt_cache_hit_tokens": 0,
+    "prompt_cache_miss_tokens": 0,
+    "requests": 0,
+}
 
 
 def reset_client():
@@ -35,9 +43,60 @@ def get_client() -> OpenAI:
     return _client
 
 
+def resolve_model(*, role: LLMRole = "default", model: str | None = None) -> str:
+    """按角色解析模型：writer/qa 可配置异构模型，留空则回退 DEEPSEEK_MODEL。"""
+    import config as cfg
+
+    if model and str(model).strip():
+        return str(model).strip()
+    if role == "writer" and cfg.WRITER_MODEL:
+        return cfg.WRITER_MODEL
+    if role == "qa" and cfg.QA_MODEL:
+        return cfg.QA_MODEL
+    return cfg.DEEPSEEK_MODEL
+
+
 def _is_retryable_status_error(exc: APIStatusError) -> bool:
     """5xx 服务端错误值得重试；4xx（密钥错、参数错、内容审核拒绝等）不重试。"""
     return exc.status_code is not None and exc.status_code >= 500
+
+
+def get_cache_usage_stats() -> dict[str, int]:
+    """累计 prompt 缓存命中统计（进程内）。"""
+    return dict(_cache_stats)
+
+
+def reset_cache_usage_stats() -> None:
+    global _cache_stats
+    _cache_stats = {
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 0,
+        "requests": 0,
+    }
+
+
+def _record_cache_usage(response: Any) -> None:
+    import config as cfg
+
+    if not cfg.LOG_PROMPT_CACHE_USAGE:
+        return
+    usage = getattr(response, "usage", None)
+    if not usage:
+        return
+    hit = int(getattr(usage, "prompt_cache_hit_tokens", 0) or 0)
+    miss = int(getattr(usage, "prompt_cache_miss_tokens", 0) or 0)
+    if hit == 0 and miss == 0:
+        return
+    _cache_stats["prompt_cache_hit_tokens"] += hit
+    _cache_stats["prompt_cache_miss_tokens"] += miss
+    _cache_stats["requests"] += 1
+    if hit > 0:
+        logger.info(
+            "LLM 前缀缓存命中 %d tokens，未命中 %d tokens（累计命中 %d）",
+            hit,
+            miss,
+            _cache_stats["prompt_cache_hit_tokens"],
+        )
 
 
 def _create_completion_with_retry(client: OpenAI, **create_kwargs) -> Any:
@@ -50,7 +109,9 @@ def _create_completion_with_retry(client: OpenAI, **create_kwargs) -> Any:
 
     for attempt in range(max_retries + 1):
         try:
-            return client.chat.completions.create(**create_kwargs)
+            response = client.chat.completions.create(**create_kwargs)
+            _record_cache_usage(response)
+            return response
         except _RETRYABLE_EXCEPTIONS as exc:
             last_exc = exc
         except APIStatusError as exc:
@@ -159,36 +220,98 @@ def _parse_llm_json(text: str) -> dict[str, Any]:
         raise
 
 
+def _build_response_format(schema: type[BaseModel] | None) -> dict[str, Any]:
+    if schema is None:
+        return {"type": "json_object"}
+    import config as cfg
+
+    if not cfg.LLM_USE_JSON_SCHEMA:
+        return {"type": "json_object"}
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": schema.__name__,
+            "strict": True,
+            "schema": schema.model_json_schema(),
+        },
+    }
+
+
+def _validate_with_schema(data: dict[str, Any], schema: type[BaseModel]) -> dict[str, Any]:
+    return schema.model_validate(data).model_dump()
+
+
+def _schema_validation_hint(exc: ValidationError) -> str:
+    return (
+        "你上次返回的 JSON 结构不符合要求："
+        + "; ".join(err["msg"] for err in exc.errors()[:5])
+        + "。请严格按约定字段重新输出完整 JSON。"
+    )
+
+
 def call_llm_json(
     messages: list[dict[str, str]],
     max_retries: int = 2,
     timeout: float = 120.0,
     max_tokens: int | None = None,
     truncation_hint: str | None = None,
+    *,
+    model: str | None = None,
+    role: LLMRole = "default",
+    schema: type[BaseModel] | None = None,
 ) -> dict[str, Any]:
-    """调用 LLM 并解析 JSON 响应，内置重试机制。"""
+    """调用 LLM 并解析 JSON 响应，内置重试机制；可选 Pydantic Schema 强校验。"""
     import config as cfg
 
     client = get_client()
     current_messages = list(messages)
     token_limit = max_tokens or cfg.LLM_MAX_TOKENS
+    resolved_model = resolve_model(role=role, model=model)
+    use_json_schema = bool(schema and cfg.LLM_USE_JSON_SCHEMA)
+    response_format = _build_response_format(schema)
 
     for attempt in range(max_retries + 1):
-        response = _create_completion_with_retry(
-            client,
-            model=cfg.DEEPSEEK_MODEL,
-            messages=current_messages,
-            response_format={"type": "json_object"},
-            max_tokens=token_limit,
-            temperature=cfg.LLM_TEMPERATURE,
-            timeout=timeout,
-        )
+        try:
+            response = _create_completion_with_retry(
+                client,
+                model=resolved_model,
+                messages=current_messages,
+                response_format=response_format,
+                max_tokens=token_limit,
+                temperature=cfg.LLM_TEMPERATURE,
+                timeout=timeout,
+            )
+        except APIStatusError as exc:
+            if (
+                use_json_schema
+                and schema is not None
+                and exc.status_code == 400
+                and response_format.get("type") == "json_schema"
+            ):
+                logger.warning("json_schema 不受支持，降级为 json_object: %s", exc)
+                response_format = {"type": "json_object"}
+                use_json_schema = False
+                response = _create_completion_with_retry(
+                    client,
+                    model=resolved_model,
+                    messages=current_messages,
+                    response_format=response_format,
+                    max_tokens=token_limit,
+                    temperature=cfg.LLM_TEMPERATURE,
+                    timeout=timeout,
+                )
+            else:
+                raise
+
         choice = response.choices[0]
         raw = choice.message.content or ""
         truncated = choice.finish_reason == "length"
 
         try:
-            return _parse_llm_json(raw)
+            data = _parse_llm_json(raw)
+            if schema is not None:
+                return _validate_with_schema(data, schema)
+            return data
         except json.JSONDecodeError as exc:
             if attempt >= max_retries:
                 hint = "（响应可能被截断，请减少章节数量或调大 LLM_MAX_TOKENS）" if truncated else ""
@@ -207,6 +330,13 @@ def call_llm_json(
                 )
             )
             current_messages.append({"role": "user", "content": retry_hint})
+        except ValidationError as exc:
+            if attempt >= max_retries:
+                raise ValueError(
+                    f"LLM 返回 JSON 未通过 Schema 校验（已重试 {max_retries} 次）: {exc}"
+                ) from exc
+            current_messages.append({"role": "assistant", "content": raw})
+            current_messages.append({"role": "user", "content": _schema_validation_hint(exc)})
 
     raise ValueError("LLM JSON 调用失败")
 
@@ -216,12 +346,16 @@ def call_llm_text(
     max_tokens: int | None = None,
     timeout: float = 120.0,
     max_continuations: int | None = None,
+    *,
+    model: str | None = None,
+    role: LLMRole = "default",
 ) -> str:
     """调用 LLM 返回纯文本，若响应被截断（finish_reason == 'length'）自动续写拼接。"""
     import config as cfg
 
     client = get_client()
     token_limit = max_tokens or cfg.LLM_MAX_TOKENS
+    resolved_model = resolve_model(role=role, model=model)
     continuations_left = (
         cfg.LLM_TEXT_MAX_CONTINUATIONS if max_continuations is None else max_continuations
     )
@@ -232,7 +366,7 @@ def call_llm_text(
     for attempt in range(continuations_left + 1):
         response = _create_completion_with_retry(
             client,
-            model=cfg.DEEPSEEK_MODEL,
+            model=resolved_model,
             messages=current_messages,
             max_tokens=token_limit,
             temperature=cfg.LLM_TEMPERATURE,

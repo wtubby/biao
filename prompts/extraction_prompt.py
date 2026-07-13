@@ -160,8 +160,7 @@ def get_extraction_system_prompt() -> str:
 EXTRACTION_SYSTEM_PROMPT = get_extraction_system_prompt()
 
 
-def build_extraction_user_prompt(tables_text: str, paragraphs_text: str) -> str:
-    return f"""请从以下招标文件内容中，按钛投标五块结构提取：投标人须知、商务要求、技术要求、资格审查、评分要求（商务+技术），以及投标文件参考格式目录。
+_EXTRACTION_TASK_PROMPT = """请从以下招标文件内容中，按钛投标五块结构提取：投标人须知、商务要求、技术要求、资格审查、评分要求（商务+技术），以及投标文件参考格式目录。
 技术评分项写入 requirements；商务评分项写入 tender_detail.commerce_scores。
 投标文件参考格式写入 tender_detail.bid_reference_catalog：重点找「第七章投标文件格式」「投标文件组成」「施工组织设计纲要」中的技术标/项目实施方案目录；有纲要内容要点时整理为目录标题，不要漏掉文末格式章节。
 
@@ -172,10 +171,52 @@ def build_extraction_user_prompt(tables_text: str, paragraphs_text: str) -> str:
 4. 原文未提及的字段填 null 或 ""，禁止根据行业常识编造任何数据。
 5. 若本段仅为全文一部分，本段未出现的内容可留空，由其他分段合并；勿因本段不完整而臆造。
 
+请直接以 { 开头、以 } 结尾输出纯 JSON 字符串。禁止使用 ```json 等 Markdown 代码块标记包裹，禁止包含任何前导或后继的解释性文字。"""
+
+_EXTRACTION_MESSAGE_JOIN = "\n\n"
+
+
+def _build_extraction_document_prompt(tables_text: str, paragraphs_text: str) -> str:
+    return f"""以下是本段招标文件原文，请先完整阅读，并仅基于原文完成后续提取任务。
+
 【表格内容】
 {tables_text}
 
 【段落内容】
-{paragraphs_text}
+{paragraphs_text}"""
 
-请直接以 {{ 开头、以 }} 结尾输出纯 JSON 字符串。禁止使用 ```json 等 Markdown 代码块标记包裹，禁止包含任何前导或后继的解释性文字。"""
+
+def build_extraction_user_messages(
+    tables_text: str,
+    paragraphs_text: str,
+    *,
+    page_hint: str | None = None,
+) -> list[str]:
+    """分层 user：大段原文前置，提取任务置末（同文档多段解析时利于 Prompt Cache）。"""
+    messages = [_build_extraction_document_prompt(tables_text, paragraphs_text), _EXTRACTION_TASK_PROMPT]
+    if page_hint:
+        messages.append(f"（本段原文范围：{page_hint}）")
+    return messages
+
+
+def build_extraction_chat_messages(
+    tables_text: str,
+    paragraphs_text: str,
+    *,
+    page_hint: str | None = None,
+) -> list[dict[str, str]]:
+    messages: list[dict[str, str]] = [
+        {"role": "system", "content": get_extraction_system_prompt()},
+    ]
+    for part in build_extraction_user_messages(
+        tables_text, paragraphs_text, page_hint=page_hint,
+    ):
+        messages.append({"role": "user", "content": part})
+    return messages
+
+
+def build_extraction_user_prompt(tables_text: str, paragraphs_text: str) -> str:
+    """兼容调试与测试：将分层 user 消息合并为单条字符串。"""
+    return _EXTRACTION_MESSAGE_JOIN.join(
+        build_extraction_user_messages(tables_text, paragraphs_text)
+    )

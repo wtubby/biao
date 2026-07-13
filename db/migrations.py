@@ -52,6 +52,9 @@ def ensure_schema() -> None:
             if "keywords" not in kc_cols:
                 conn.execute(text("ALTER TABLE knowledge_chunks ADD COLUMN keywords TEXT"))
                 logger.info("已为 knowledge_chunks 表添加 keywords 列")
+            if "context_prefix" not in kc_cols:
+                conn.execute(text("ALTER TABLE knowledge_chunks ADD COLUMN context_prefix TEXT"))
+                logger.info("已为 knowledge_chunks 表添加 context_prefix 列")
 
             # 先清历史重复，再补 (folder_path, chunk_hash) 唯一索引
             indexes = {

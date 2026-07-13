@@ -14,10 +14,6 @@ def get_selection_rewrite_system_prompt(domain: str | None = None) -> str:
 5. 不要改动或续写选区以外（即【前文】和【后文】）的内容。"""
 
 
-# 兼容旧引用（脚本/测试等无 domain 场景）
-SELECTION_REWRITE_SYSTEM_PROMPT = get_selection_rewrite_system_prompt()
-
-
 def build_selection_rewrite_user_prompt(
     chapter_title: str,
     selected_text: str,

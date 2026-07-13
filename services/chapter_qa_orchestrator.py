@@ -10,9 +10,10 @@ from config import (
 )
 from db.models import Project, TechOutline, TechRequirement
 from llm.llm_client import call_llm_json
+from llm.schemas import QAResult
 from sqlalchemy.orm import Session
 from prompts.qa_prompt import (
-    QA_SYSTEM_PROMPT,
+    build_qa_chat_messages,
     build_qa_user_prompt,
     sample_content_windows_for_qa,
 )
@@ -170,15 +171,9 @@ def _allowed_standard_sources(bundle: dict) -> str:
 
 def _run_soft_qa_once(content: str, bundle: dict, *, segment_label: str | None = None) -> dict:
     return call_llm_json(
-        [
-            {"role": "system", "content": QA_SYSTEM_PROMPT},
-            {
-                "role": "user",
-                "content": build_qa_user_prompt(
-                    content, bundle, segment_label=segment_label,
-                ),
-            },
-        ]
+        build_qa_chat_messages(content, bundle, segment_label=segment_label),
+        role="qa",
+        schema=QAResult,
     )
 
 
@@ -286,6 +281,58 @@ def _soft_issue_list(soft: dict) -> list[str]:
         + (soft.get("scope_issues") or [])
         + (soft.get("specificity_issues") or [])
     )
+
+
+def run_segment_qa(
+    content: str,
+    project: Project,
+    chapter: TechOutline,
+    bundle: dict,
+    *,
+    segment_label: str,
+    content_plan: dict | None = None,
+) -> tuple[list[str], dict]:
+    """分段撰写时的轻量质检：硬规则子集 + 单段软检。"""
+    guidance = bundle.get("guidance") or {}
+    other_titles = bundle.get("other_leaf_titles") or []
+    hard_errors: list[str] = []
+
+    if other_titles:
+        hard_errors.extend(check_chapter_scope(content, chapter.title or "", other_titles))
+    hard_errors.extend(check_template_residues(content))
+    hard_errors.extend(check_chart_renderability(content))
+    hard_errors.extend(check_ai_spacing(content))
+    hard_errors.extend(check_markdown_table_integrity(content))
+    hard_errors.extend(check_atomic_markdown_closure(content))
+    hard_errors.extend(
+        check_fabricated_standards(
+            content,
+            _allowed_standard_sources(bundle),
+            domain=bundle.get("engineering_domain"),
+        )
+    )
+    if content.strip().lstrip().startswith("#"):
+        hard_errors.append("分段正文严禁输出 # 标题行")
+
+    seen: set[str] = set()
+    unique_hard: list[str] = []
+    for err in hard_errors:
+        if err not in seen:
+            seen.add(err)
+            unique_hard.append(err)
+    if unique_hard:
+        return unique_hard, {}
+
+    seg_plan = content_plan if isinstance(content_plan, dict) else None
+    if seg_plan and not is_descriptive_chapter(chapter.title):
+        plan_errors = check_plan_key_points_coverage(
+            content, seg_plan.get("key_points"),
+        )
+        if plan_errors:
+            return plan_errors, {}
+
+    soft = _run_soft_qa_once(content, bundle, segment_label=segment_label)
+    return [], soft
 
 
 def _apply_qa_result_to_chapter(

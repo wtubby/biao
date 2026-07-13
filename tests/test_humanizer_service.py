@@ -32,3 +32,15 @@ def test_humanize_strips_summary_cliches():
     result = humanize_content(text)
     assert "综上所述" not in result
     assert "三级质检" in result
+
+
+def test_humanize_preserves_step_sequence_connectors():
+    text = (
+        "首先，进行场地平整与测量放线，确保轴线偏差控制在5mm以内。"
+        "其次，开展基坑开挖与支护，坑壁坡度按设计要求放坡，并设置排水沟。"
+        "最后，进行基础垫层浇筑与验收，验收合格后方可进入下道工序。"
+    ) * 3
+    result = humanize_content(text)
+    assert "首先，" in result
+    assert "其次，" in result
+    assert "最后，" in result

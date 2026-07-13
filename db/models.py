@@ -116,6 +116,7 @@ class KnowledgeChunk(Base):
     chunk_hash: Mapped[str] = mapped_column(Text, index=True)
     text: Mapped[str] = mapped_column(Text)
     keywords: Mapped[str | None] = mapped_column(Text, nullable=True)  # 逗号/顿号分隔
+    context_prefix: Mapped[str | None] = mapped_column(Text, nullable=True)
     embedding: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     embedding_model: Mapped[str | None] = mapped_column(Text, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)

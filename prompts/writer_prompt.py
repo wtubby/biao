@@ -9,11 +9,8 @@ from prompts.bundle_blocks import (
     format_prior_chapters_block,
     format_retrieval_notes,
 )
-from prompts.context_blocks import (
-    format_contradictions_block,
-    format_overview_block,
-    format_scope_constraints,
-)
+from prompts.project_context import build_cacheable_project_prefix
+from prompts.context_blocks import format_scope_constraints
 from services.writing_guidance import get_chapter_constraints, is_descriptive_chapter
 
 _WRITER_RULES = """每次只撰写**一个叶子章节**的正文，严格聚焦于当前章节内容，不得穿插、预写或概括其他章节。
@@ -31,8 +28,21 @@ _WRITER_RULES = """每次只撰写**一个叶子章节**的正文，严格聚焦
 
 _WRITER_RULES_COMPACT = """单章 Markdown 正文，严禁输出 # 标题行。
 凡涉及标准号、品牌型号，必须有据可查，无依据时只做通用工艺描述，严禁凭空虚构。
-方案类须有量化步骤与 **[参数] 数值+单位**；图表使用 [GANTT_DATA]/[FLOW_DATA] 等单行 JSON 占位符。
+方案类须有量化步骤与 **[参数] 数值+单位**。
 概况/目标类只写客观描述或承诺，不写具体对策措施。"""
+
+_WRITER_RULES_STRUCTURED = """每次只撰写**一个叶子章节**的正文，严格聚焦于当前章节内容，不得穿插、预写或概括其他章节。
+
+【输出格式要求】
+1. 按系统提示的 JSON 格式输出，markdown_content 为纯正文，严禁 # 标题行与客套话。
+2. 方案/措施类：须含量化步骤与 **[参数] 数值+单位**；图表写入 embedded_charts，正文用 [[CHART:n]] 标记插入位置。
+
+【材料真实性底线】
+1. 坚决杜绝宏观宣誓套话。
+2. 品牌、设备型号、规范标准号须以「检索素材」或「全局事实」为准；无依据时只做通用描述，严禁编造。"""
+
+_WRITER_RULES_COMPACT_STRUCTURED = """单章 JSON 输出：markdown_content 纯正文（无 # 标题），图表放 embedded_charts。
+标准号/品牌须有依据；方案类须 **[参数] 数值+单位**；概况类只写客观描述。"""
 
 
 def _writer_identity(domain: str | None) -> str:
@@ -102,14 +112,27 @@ def should_attach_guide_to_user(bundle: dict) -> bool:
     return not is_descriptive_chapter(bundle.get("chapter_title"))
 
 
-def get_writer_system_prompt(domain: str | None = None, *, compact: bool | None = None) -> str:
-    from config import WRITER_SYSTEM_COMPACT
+def get_writer_system_prompt(
+    domain: str | None = None,
+    *,
+    compact: bool | None = None,
+    structured: bool | None = None,
+) -> str:
+    from config import WRITER_STRUCTURED_OUTPUT, WRITER_SYSTEM_COMPACT
+    from services.writer_output import writer_output_json_hint
 
     if compact is None:
         compact = WRITER_SYSTEM_COMPACT
+    if structured is None:
+        structured = WRITER_STRUCTURED_OUTPUT
     spec = resolve_domain(domain)
-    rules = _WRITER_RULES_COMPACT if compact else _WRITER_RULES
+    if structured:
+        rules = _WRITER_RULES_COMPACT_STRUCTURED if compact else _WRITER_RULES_STRUCTURED
+    else:
+        rules = _WRITER_RULES_COMPACT if compact else _WRITER_RULES
     prompt = f"{spec.identity_prompt}\n\n{rules}"
+    if structured:
+        prompt = f"{prompt}\n\n{writer_output_json_hint()}"
     if compact:
         return prompt
     guide = load_domain_writing_guide(domain)
@@ -120,11 +143,33 @@ def get_writer_system_prompt(domain: str | None = None, *, compact: bool | None 
 
 _OTHER_LEAF_PROMPT_LIMIT = 40
 
+_WRITER_MESSAGE_JOIN = "\n\n"
 
-def build_writer_user_prompt(bundle: dict) -> str:
-    global_params = bundle.get("global_params") or {}
-    requirements_text = bundle.get("requirements_text") or "（无相关评分项要求）"
+
+def _writer_project_context(bundle: dict) -> str:
+    """同项目各章共享的稳定上下文（前置以利于 Prompt Cache）。"""
+    return build_cacheable_project_prefix(bundle)
+
+
+def _writer_continuity_context(bundle: dict) -> str:
+    """前序章节与同级衔接（按撰写顺序变化）。"""
+    sibling_block = format_immediate_prior_sibling_block(bundle, style="writer")
+    prior_block = format_prior_chapters_block(bundle, style="writer")
+    return (sibling_block + prior_block).strip()
+
+
+def _writer_retrieval_context(bundle: dict) -> str:
     retrieval_text = bundle.get("retrieval_text") or "（无检索素材）"
+    empty_retrieval_block = format_retrieval_notes(bundle)
+    body = f"## 检索素材\n{retrieval_text}"
+    if empty_retrieval_block:
+        body = f"{body}\n{empty_retrieval_block}"
+    return body.strip()
+
+
+def _writer_chapter_task_body(bundle: dict) -> str:
+    """本章任务与规划（每章/每段不同，置末）。"""
+    requirements_text = bundle.get("requirements_text") or "（无相关评分项要求）"
     chapter_title = bundle.get("chapter_title") or "未命名章节"
     chapter_level = bundle.get("chapter_level") or "未知"
     chapter_path = bundle.get("chapter_path") or "未知路径"
@@ -136,10 +181,6 @@ def build_writer_user_prompt(bundle: dict) -> str:
     word_hint = f"建议篇幅约 {target_words} 字（允许 ±25%）" if target_words else "篇幅与绑定评分项分值匹配"
 
     scope_block = format_scope_constraints(bundle, style="writer", limit=_OTHER_LEAF_PROMPT_LIMIT)
-    overview_block = format_overview_block(bundle.get("project_overview") or "", style="writer")
-    empty_retrieval_block = format_retrieval_notes(bundle)
-    sibling_block = format_immediate_prior_sibling_block(bundle, style="writer")
-    prior_block = format_prior_chapters_block(bundle, style="writer")
 
     req_hint = (bundle.get("requirements_hint") or "").strip()
     req_hint_block = f"\n\n{req_hint}" if req_hint else ""
@@ -147,18 +188,11 @@ def build_writer_user_prompt(bundle: dict) -> str:
     matrix_block = f"\n\n## 本章评分响应矩阵\n{matrix_context}\n" if matrix_context else ""
     evaluation_focus = (bundle.get("evaluation_focus") or "").strip()
     focus_block = f"\n\n{evaluation_focus}\n" if evaluation_focus else ""
-    contra_block = format_contradictions_block(bundle.get("contradictions") or [], style="writer")
 
-    base = f"""## 全局工程信息
-{json.dumps(global_params, ensure_ascii=False, indent=2)}
-
-{overview_block}## 本章评分项
+    base = f"""## 本章评分项
 {requirements_text}{req_hint_block}{matrix_block}{focus_block}
 
-## 检索素材
-{retrieval_text}
-{empty_retrieval_block}
-{sibling_block}{prior_block}{contra_block}## 章节定位
+## 章节定位
 标题：{chapter_title}
 层级：第 {chapter_level} 级
 路径：{chapter_path}
@@ -168,10 +202,6 @@ def build_writer_user_prompt(bundle: dict) -> str:
 
 ## 撰写范围（必须遵守）
 {scope_block}"""
-
-    facts_text = (bundle.get("global_facts_text") or "").strip()
-    if facts_text:
-        base += f"\n\n【全局事实变量（全书保持一致，涉及时必须使用以下信息，不得自行编造）】\n{facts_text}"
 
     plan = bundle.get("content_plan")
     if plan and isinstance(plan, dict):
@@ -235,14 +265,6 @@ def build_writer_user_prompt(bundle: dict) -> str:
     if chart_hint:
         base += f"\n\n## 图表要求\n{chart_hint}"
 
-    standards_hint = bundle.get("standards_hint")
-    if standards_hint:
-        base += f"\n\n## 写作惯例提示（非标准条文原文，仅供表述参考）\n{standards_hint}"
-
-    blind_constraints = (bundle.get("blind_bid_constraints") or "").strip()
-    if blind_constraints:
-        base += f"\n\n{blind_constraints}"
-
     ref_bid = (bundle.get("reference_bid_text") or "").strip()
     if ref_bid:
         base += (
@@ -267,7 +289,62 @@ def build_writer_user_prompt(bundle: dict) -> str:
         if excerpt:
             base += f"\n\n## 领域写作要点\n{excerpt}"
 
+    from config import WRITER_STRUCTURED_OUTPUT
+
+    if WRITER_STRUCTURED_OUTPUT:
+        return base + "\n\n请按 JSON 格式输出本章正文（markdown_content + embedded_charts）。"
     return base + "\n\n请撰写本章正文。"
+
+
+def build_writer_user_messages(
+    bundle: dict,
+    *,
+    fix_instructions: str | None = None,
+) -> list[str]:
+    """分层 user 消息：稳定上下文前置，本章任务置末（利于 Prompt Cache 前缀命中）。"""
+    messages: list[str] = []
+    for part in (
+        _writer_project_context(bundle),
+        _writer_continuity_context(bundle),
+        _writer_retrieval_context(bundle),
+        _writer_chapter_task_body(bundle),
+    ):
+        text = (part or "").strip()
+        if text:
+            messages.append(text)
+    if fix_instructions:
+        messages.append(f"## 修改要求\n{fix_instructions.strip()}")
+    return messages
+
+
+def build_writer_chat_messages(
+    bundle: dict,
+    *,
+    fix_instructions: str | None = None,
+    include_system: bool = True,
+    structured: bool | None = None,
+) -> list[dict[str, str]]:
+    domain = bundle.get("engineering_domain") or DEFAULT_DOMAIN
+    messages: list[dict[str, str]] = []
+    if include_system:
+        messages.append({
+            "role": "system",
+            "content": get_writer_system_prompt(domain, structured=structured),
+        })
+    for part in build_writer_user_messages(bundle, fix_instructions=fix_instructions):
+        messages.append({"role": "user", "content": part})
+    return messages
+
+
+def build_writer_user_prompt(
+    bundle: dict,
+    *,
+    fix_instructions: str | None = None,
+) -> str:
+    """兼容调试预览：将分层 user 消息合并为单条字符串。"""
+    return _WRITER_MESSAGE_JOIN.join(
+        build_writer_user_messages(bundle, fix_instructions=fix_instructions)
+    )
 
 
 def build_key_chapter_init_prompt(

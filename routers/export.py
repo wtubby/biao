@@ -23,6 +23,7 @@ from services.compliance_service import (
     run_compliance,
 )
 from services.export_debug_service import build_debug_zip
+from services.outline_order import sort_outline_tree_dfs
 from services.pdf_export_service import convert_docx_to_pdf
 from services.project_status import ALLOW_EXPORT, require_status
 
@@ -46,11 +47,8 @@ def yellow_chapter_risks(chapters: list[TechOutline]) -> list[dict]:
 
 def _load_export_chapters(db: Session, project: Project, action: str) -> list[TechOutline]:
     require_status(project, ALLOW_EXPORT, action)
-    chapters = (
-        db.query(TechOutline)
-        .filter(TechOutline.project_id == project.id)
-        .order_by(TechOutline.sort_order)
-        .all()
+    chapters = sort_outline_tree_dfs(
+        db.query(TechOutline).filter(TechOutline.project_id == project.id).all()
     )
     if not chapters:
         raise HTTPException(400, "大纲为空，无法导出")
@@ -126,11 +124,8 @@ def get_yellow_export_risks(project_id: str, db: Session = Depends(get_db)):
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
         raise HTTPException(404, "项目不存在")
-    chapters = (
-        db.query(TechOutline)
-        .filter(TechOutline.project_id == project_id)
-        .order_by(TechOutline.sort_order)
-        .all()
+    chapters = sort_outline_tree_dfs(
+        db.query(TechOutline).filter(TechOutline.project_id == project_id).all()
     )
     risks = yellow_chapter_risks(chapters)
     return {"count": len(risks), "chapters": risks}

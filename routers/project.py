@@ -12,7 +12,7 @@ from db.models import GlobalFact, KnowledgeItem, Project, TechOutline, TechRequi
 from domains.registry import DEFAULT_DOMAIN
 from services.facts_service import init_default_facts, sync_basic_info_fact
 
-from prompts.outline_prompt import get_knowledge_folders
+from services.knowledge_registry import get_knowledge_folders
 from routers.deps import find_source_file
 from services.outline_catalog_source import apply_catalog_source, get_catalog_payload
 from services.generation_mode import get_generation_mode

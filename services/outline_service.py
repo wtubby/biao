@@ -12,10 +12,10 @@ from prompts.outline_prompt import (
     build_branch_user_prompt,
     build_skeleton_user_prompt,
     get_branch_system_prompt,
-    get_knowledge_folders,
     get_reference_structure,
     get_skeleton_system_prompt,
 )
+from services.knowledge_registry import get_knowledge_folders
 from services.project_meta import (
     get_meta,
     get_outline_catalog,
@@ -45,6 +45,7 @@ from services.prompt_project_info import (
     build_prompt_global_params,
     validate_prompt_global_params,
 )
+from services.outline_order import reorder_outline_dict_nodes, sort_outline_tree_dfs
 from services.requirement_utils import requirement_dicts
 
 
@@ -179,6 +180,18 @@ def generate_outline_skeleton(
     return nodes
 
 
+def _other_branches_for_expand(
+    level2_nodes: list[dict],
+    current_branch: dict,
+) -> list[dict]:
+    current_id = str(current_branch.get("id") or "")
+    return [
+        {"id": n["id"], "title": n.get("title"), "parent_id": n.get("parent_id")}
+        for n in level2_nodes
+        if str(n.get("id") or "") != current_id
+    ]
+
+
 def _expand_branch(
     global_info: dict,
     branch: dict,
@@ -187,6 +200,7 @@ def _expand_branch(
     knowledge_folders: list[str],
     *,
     generation_mode: str = GENERATION_MODE_FULL,
+    other_branches: list[dict] | None = None,
 ) -> list[dict]:
     domain = (global_info or {}).get("工程领域")
     messages = [
@@ -196,6 +210,7 @@ def _expand_branch(
             "content": build_branch_user_prompt(
                 global_info, branch, catalog, requirements, knowledge_folders,
                 generation_mode=generation_mode,
+                other_branches=other_branches,
             ),
         },
     ]
@@ -207,6 +222,148 @@ def _expand_branch(
         truncation_hint="你上次返回的分支 JSON 被截断，请压缩 content_boundary 至 150 字以内，重新输出完整 JSON。",
     )
     return result.get("nodes") or []
+
+
+def _is_id_under_branch(node_id: str, branch_id: str) -> bool:
+    return node_id == branch_id or node_id.startswith(f"{branch_id}.")
+
+
+def _next_child_id(parent_id: str, used_ids: set[str]) -> str:
+    idx = 1
+    while True:
+        candidate = f"{parent_id}.{idx}"
+        if candidate not in used_ids:
+            return candidate
+        idx += 1
+
+
+def _sanitize_branch_expand_nodes(
+    branch: dict,
+    nodes: list[dict],
+    *,
+    used_ids: set[str] | None = None,
+) -> tuple[list[dict], list[str]]:
+    """校验分支展开节点 id 是否归属本分支且全局唯一，必要时按 branch_id 重命名。"""
+    if not nodes:
+        return [], []
+
+    branch_id = str(branch["id"])
+    branch_title = str(branch.get("title") or branch_id)
+    warnings: list[str] = []
+    occupied = used_ids if used_ids is not None else set()
+
+    if len(nodes) == 1 and str(nodes[0].get("id")) == branch_id:
+        node = dict(nodes[0])
+        node["id"] = branch_id
+        if node.get("parent_id") is None:
+            node["parent_id"] = branch.get("parent_id")
+        occupied.add(branch_id)
+        return [node], []
+
+    id_remap: dict[str, str] = {}
+    local_used = set(occupied)
+    local_used.add(branch_id)
+    result: list[dict] = []
+
+    ordered = sorted(
+        nodes,
+        key=lambda n: (
+            int(n.get("level") or 99),
+            int(n.get("sort_order") or 0),
+            str(n.get("id") or ""),
+        ),
+    )
+
+    for raw in ordered:
+        node = dict(raw)
+        old_id = str(node.get("id") or "").strip()
+
+        if old_id == branch_id:
+            new_id = branch_id
+        elif old_id and _is_id_under_branch(old_id, branch_id) and old_id not in local_used:
+            new_id = old_id
+        else:
+            parent_id = node.get("parent_id")
+            parent_new = branch_id
+            if parent_id is not None and str(parent_id).strip():
+                pid = str(parent_id).strip()
+                parent_new = id_remap.get(pid, pid)
+                if not _is_id_under_branch(parent_new, branch_id):
+                    parent_new = branch_id
+            new_id = _next_child_id(parent_new, local_used)
+            if old_id and old_id != new_id:
+                warnings.append(
+                    f"分支「{branch_title}」节点 id「{old_id}」已修正为「{new_id}」"
+                )
+            elif not old_id:
+                warnings.append(
+                    f"分支「{branch_title}」存在空 id 节点，已命名为「{new_id}」"
+                )
+
+        if old_id and old_id != new_id:
+            id_remap[old_id] = new_id
+        local_used.add(new_id)
+        node["id"] = new_id
+
+        if new_id == branch_id:
+            node["parent_id"] = branch.get("parent_id")
+        else:
+            pid = node.get("parent_id")
+            if pid is None or not str(pid).strip():
+                node["parent_id"] = branch_id
+            else:
+                pid_str = str(pid).strip()
+                mapped = id_remap.get(pid_str, pid_str)
+                if mapped in local_used and _is_id_under_branch(mapped, branch_id):
+                    node["parent_id"] = mapped
+                elif mapped == branch_id:
+                    node["parent_id"] = branch_id
+                else:
+                    node["parent_id"] = branch_id
+
+        result.append(node)
+
+    occupied.update(local_used)
+    return result, warnings
+
+
+def _ensure_unique_outline_ids(nodes: list[dict]) -> tuple[list[dict], list[str]]:
+    """全树 id 唯一性兜底，防止跨分支残留冲突导致落库主键冲突。"""
+    warnings: list[str] = []
+    seen: set[str] = set()
+    id_remap: dict[str, str] = {}
+    result: list[dict] = []
+
+    for raw in nodes:
+        node = dict(raw)
+        nid = str(node.get("id") or "").strip()
+        if not nid:
+            nid = f"outline-{len(result) + 1}"
+
+        if nid in seen:
+            parent = node.get("parent_id")
+            if parent and str(parent) in seen:
+                new_id = _next_child_id(str(parent), seen)
+            else:
+                suffix = 2
+                new_id = f"{nid}-r{suffix}"
+                while new_id in seen:
+                    suffix += 1
+                    new_id = f"{nid}-r{suffix}"
+            warnings.append(f"节点 id「{nid}」与其他章节冲突，已重命名为「{new_id}」")
+            id_remap[nid] = new_id
+            nid = new_id
+
+        seen.add(nid)
+        node["id"] = nid
+        result.append(node)
+
+    for node in result:
+        pid = node.get("parent_id")
+        if pid is not None and str(pid) in id_remap:
+            node["parent_id"] = id_remap[str(pid)]
+
+    return result, warnings
 
 
 def generate_outline_ai(db: Session, project: Project) -> tuple[list[TechOutline], str, list[str]]:
@@ -244,6 +401,7 @@ def generate_outline_ai(db: Session, project: Project) -> tuple[list[TechOutline
         raise ValueError("大纲骨架生成失败：未包含任何二级章节，请重试")
 
     all_nodes: list[dict] = list(level1_nodes)
+    occupied_ids: set[str] = {str(n["id"]) for n in level1_nodes}
     expand_warnings: list[str] = []
     node_warnings: dict[str, str] = {}
     logger.info("大纲深化第二步：逐支展开（共 %d 个分支）", len(level2_nodes))
@@ -254,6 +412,7 @@ def generate_outline_ai(db: Session, project: Project) -> tuple[list[TechOutline
             result_nodes = _expand_branch(
                 global_info, branch, catalog, req_dicts, knowledge_folders,
                 generation_mode=generation_mode,
+                other_branches=_other_branches_for_expand(level2_nodes, branch),
             )
         except Exception as exc:
             logger.warning("分支「%s」展开失败，降级为单一叶子节点: %s", branch_title, exc)
@@ -264,6 +423,12 @@ def generate_outline_ai(db: Session, project: Project) -> tuple[list[TechOutline
             expand_warnings.append(warning_msg)
             node_warnings[branch_id] = warning_msg
 
+        if result_nodes:
+            result_nodes, id_warnings = _sanitize_branch_expand_nodes(
+                branch, result_nodes, used_ids=occupied_ids,
+            )
+            expand_warnings.extend(id_warnings)
+
         if not result_nodes:
             if branch_id not in node_warnings:
                 warning_msg = (
@@ -272,11 +437,16 @@ def generate_outline_ai(db: Session, project: Project) -> tuple[list[TechOutline
                 expand_warnings.append(warning_msg)
                 node_warnings[branch_id] = warning_msg
             all_nodes.append(_fallback_branch_leaf(branch, req_dicts, knowledge_folders))
+            occupied_ids.add(str(branch_id))
         elif any(n.get("id") == branch_id for n in result_nodes):
             all_nodes.extend(result_nodes)
         else:
             all_nodes.append({**branch, "is_leaf": 0})
+            occupied_ids.add(str(branch_id))
             all_nodes.extend(result_nodes)
+
+    all_nodes, dup_warnings = _ensure_unique_outline_ids(all_nodes)
+    expand_warnings.extend(dup_warnings)
 
     target_pages = int(get_meta(project).get("target_pages") or TARGET_PAGES_DEFAULT)
     nodes = enrich_outline_nodes(
@@ -403,6 +573,7 @@ def enrich_outline_nodes(
 
 
 def save_outline_tree(db: Session, project_id: str, nodes: list[dict]) -> list[TechOutline]:
+    nodes = reorder_outline_dict_nodes(nodes)
     existing = {
         r.id: r
         for r in db.query(TechOutline).filter(TechOutline.project_id == project_id).all()
@@ -498,11 +669,8 @@ def get_outline_tree(db: Session, project_id: str) -> list[dict]:
     node_warnings: dict[str, str] = {}
     if project:
         node_warnings = get_meta(project).get("outline_node_warnings") or {}
-    rows = (
-        db.query(TechOutline)
-        .filter(TechOutline.project_id == project_id)
-        .order_by(TechOutline.sort_order)
-        .all()
+    rows = sort_outline_tree_dfs(
+        db.query(TechOutline).filter(TechOutline.project_id == project_id).all()
     )
     return [_outline_to_dict(r, node_warnings) for r in rows]
 
@@ -540,6 +708,8 @@ def _outline_to_dict(row: TechOutline, node_warnings: dict[str, str] | None = No
     base.update(guidance_to_outline_dict(row.writing_guidance))
     if debug and debug.get("retrieval_warning"):
         base["retrieval_warning"] = debug["retrieval_warning"]
+    if debug and debug.get("retrieval_route"):
+        base["retrieval_route"] = debug["retrieval_route"]
     if node_warnings:
         warning = node_warnings.get(row.id)
         if warning:
@@ -669,11 +839,8 @@ def _outline_rows_to_enrich_nodes(rows: list[TechOutline]) -> list[dict]:
 
 def reapply_outline_generation_mode(db: Session, project: Project) -> int:
     """切换档位后，按当前大纲结构重算各章目标字数。"""
-    rows = (
-        db.query(TechOutline)
-        .filter(TechOutline.project_id == project.id)
-        .order_by(TechOutline.sort_order)
-        .all()
+    rows = sort_outline_tree_dfs(
+        db.query(TechOutline).filter(TechOutline.project_id == project.id).all()
     )
     if not rows:
         return 0
@@ -709,11 +876,8 @@ def scale_leaves_to_total_words(db: Session, project: Project, total_words: int)
     if current <= 0:
         return 0
     ratio = total_words / current
-    all_rows = (
-        db.query(TechOutline)
-        .filter(TechOutline.project_id == project.id)
-        .order_by(TechOutline.sort_order)
-        .all()
+    all_rows = sort_outline_tree_dfs(
+        db.query(TechOutline).filter(TechOutline.project_id == project.id).all()
     )
     nodes = _outline_rows_to_enrich_nodes(all_rows)
     for node in nodes:

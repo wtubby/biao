@@ -98,6 +98,7 @@ def write_and_qa_chapter(
                 fix_instructions,
                 chat_messages=messages,
                 use_chat=is_key,
+                qa_context={"project": project, "chapter": chapter},
             )
             other_titles = bundle.get("other_leaf_titles") or []
             if other_titles:

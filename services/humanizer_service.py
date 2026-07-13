@@ -37,13 +37,7 @@ _AI_CLICHE_RULES: list[dict[str, Any]] = [
     {"phrase": "闭环管理", "category": "互联网套话", "suggestion": "改为全过程管控"},
     {"phrase": "闭环", "category": "互联网套话", "suggestion": "改为全流程/全过程", "replace": "全流程"},
     {"phrase": "颗粒度", "category": "互联网套话", "suggestion": "改为细致程度/管理精度", "replace": "细致程度"},
-    # 段首过渡（仅 humanize 剥离 + detect）
-    {"phrase": "首先", "category": "段首套话", "suggestion": "段首过渡词可删去，直接写技术内容", "filler": True},
-    {"phrase": "其次", "category": "段首套话", "suggestion": "段首过渡词可删去，直接写技术内容", "filler": True},
-    {"phrase": "再次", "category": "段首套话", "suggestion": "段首过渡词可删去，直接写技术内容", "filler": True},
-    {"phrase": "最后", "category": "段首套话", "suggestion": "段首过渡词可删去，直接写技术内容", "filler": True},
-    {"phrase": "一方面", "category": "段首套话", "suggestion": "段首过渡词可删去，直接写技术内容", "filler": True},
-    {"phrase": "另一方面", "category": "段首套话", "suggestion": "段首过渡词可删去，直接写技术内容", "filler": True},
+    # 段首过渡（仅 humanize 剥离 + detect）；顺序连接词（首先/其次/最后等）不列入
     {"phrase": "不仅如此", "category": "段首套话", "suggestion": "段首过渡词可删去，直接写技术内容", "filler": True},
     {"phrase": "更重要的是", "category": "段首套话", "suggestion": "段首过渡词可删去，直接写技术内容", "filler": True},
 ]
@@ -132,7 +126,8 @@ def deep_humanize_content(text: str) -> str:
             [
                 {"role": "system", "content": "你是技术方案润色编辑，擅长去 AI 痕迹。"},
                 {"role": "user", "content": prompt},
-            ]
+            ],
+            role="writer",
         )
         cleaned = (rewritten or "").strip()
         if len(cleaned) < max(80, int(len(text) * 0.4)):

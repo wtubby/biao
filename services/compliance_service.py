@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from db.models import Project, TechOutline, TechRequirement
 from services.project_meta import get_meta, set_meta
+from services.outline_order import sort_outline_tree_dfs
 from services.qa_rules import (
     SUBSTANTIAL_KEYWORDS,
     check_font_safety,
@@ -466,11 +467,8 @@ def get_last_compliance_report(project: Project) -> dict[str, Any] | None:
 
 def check_compliance_now(db: Session, project: Project) -> dict[str, Any]:
     """在不导出 docx 的情况下运行合规检查（用于生成过程中随时自检）。"""
-    chapters = (
-        db.query(TechOutline)
-        .filter(TechOutline.project_id == project.id)
-        .order_by(TechOutline.sort_order)
-        .all()
+    chapters = sort_outline_tree_dfs(
+        db.query(TechOutline).filter(TechOutline.project_id == project.id).all()
     )
     return run_compliance(db, project, docx_path=None, chapters=chapters)
 

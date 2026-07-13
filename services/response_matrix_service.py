@@ -8,6 +8,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from db.models import Project, TechOutline, TechRequirement
+from services.outline_order import sort_outline_tree_dfs
 from services.chapter_review_errors import merge_review_errors
 from services.project_meta import get_meta
 from services.qa_rules import (
@@ -236,11 +237,8 @@ def build_response_matrix(db: Session, project: Project) -> dict[str, Any]:
         .order_by(TechRequirement.is_risk_item.desc(), TechRequirement.score_value.desc())
         .all()
     )
-    chapters = (
-        db.query(TechOutline)
-        .filter(TechOutline.project_id == project.id)
-        .order_by(TechOutline.sort_order)
-        .all()
+    chapters = sort_outline_tree_dfs(
+        db.query(TechOutline).filter(TechOutline.project_id == project.id).all()
     )
     leaf_chapters = [ch for ch in chapters if ch.is_leaf == 1]
     chapters_by_req: dict[str, list[TechOutline]] = {}

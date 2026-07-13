@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from db.models import Project, TechOutline, TechRequirement
 from services.chapter_review_errors import parse_review_errors
 from services.compliance_service import get_last_compliance_report
+from services.outline_order import sort_outline_tree_dfs
 from services.outline_service import get_outline_tree
 from services.project_meta import get_meta
 from services.writing_guidance import guidance_to_outline_dict
@@ -23,11 +24,8 @@ def build_debug_zip(db: Session, project: Project) -> tuple[bytes, str]:
     project_id = project.id
     outline = get_outline_tree(db, project_id)
     requirements = db.query(TechRequirement).filter(TechRequirement.project_id == project_id).all()
-    chapters = (
-        db.query(TechOutline)
-        .filter(TechOutline.project_id == project_id)
-        .order_by(TechOutline.sort_order)
-        .all()
+    chapters = sort_outline_tree_dfs(
+        db.query(TechOutline).filter(TechOutline.project_id == project_id).all()
     )
 
     req_payload = [

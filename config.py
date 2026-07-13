@@ -11,6 +11,11 @@ load_dotenv(ENV_PATH, override=True)
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+# Maker-Checker：留空则回退为 DEEPSEEK_MODEL
+WRITER_MODEL = os.getenv("WRITER_MODEL", "").strip()
+QA_MODEL = os.getenv("QA_MODEL", "").strip()
+# 对带 schema 的 JSON 调用尝试 json_schema strict；不支持时自动降级 json_object
+LLM_USE_JSON_SCHEMA = os.getenv("LLM_USE_JSON_SCHEMA", "1").lower() in ("1", "true", "yes")
 LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "4096"))
 LLM_MAX_TOKENS_CEILING = int(os.getenv("LLM_MAX_TOKENS_CEILING", "8000"))
 CHARS_PER_TOKEN_CN = float(os.getenv("CHARS_PER_TOKEN_CN", "0.6"))
@@ -39,6 +44,11 @@ def get_cors_origins() -> list[str]:
 
 
 BM25_TOP_K = int(os.getenv("BM25_TOP_K", "5"))
+# 自适应 RAG：按章节类型动态 top_k / 是否走向量
+ENABLE_ADAPTIVE_RAG = os.getenv("ENABLE_ADAPTIVE_RAG", "1").lower() in ("1", "true", "yes")
+RETRIEVAL_TOP_K_LIGHT = int(os.getenv("RETRIEVAL_TOP_K_LIGHT", "3"))
+RETRIEVAL_TOP_K_DEEP = int(os.getenv("RETRIEVAL_TOP_K_DEEP", "8"))
+RETRIEVAL_TOP_K_PLAN_FOLLOWUP = int(os.getenv("RETRIEVAL_TOP_K_PLAN_FOLLOWUP", "4"))
 EMBEDDING_MODEL_PATH = os.getenv(
     "EMBEDDING_MODEL_PATH",
     str(BASE_DIR / "models" / "bge-small-zh-v1.5"),
@@ -73,6 +83,15 @@ SKIP_CONTENT_PLAN_WORD_THRESHOLD = int(os.getenv("SKIP_CONTENT_PLAN_WORD_THRESHO
 # 压缩 writer system：完整领域指南改注入 user prompt 摘要
 WRITER_SYSTEM_COMPACT = os.getenv("WRITER_SYSTEM_COMPACT", "1").lower() in ("1", "true", "yes")
 WRITER_GUIDE_USER_MAX_CHARS = int(os.getenv("WRITER_GUIDE_USER_MAX_CHARS", "600"))
+# Writer 结构化输出：正文与 embedded_charts 分字段，消除图表占位符格式错误
+WRITER_STRUCTURED_OUTPUT = os.getenv("WRITER_STRUCTURED_OUTPUT", "1").lower() in ("1", "true", "yes")
+# 长章分段撰写时，每段生成后做轻量 QA 闭环（不过则重写该段）
+ENABLE_SEGMENT_QA = os.getenv("ENABLE_SEGMENT_QA", "1").lower() in ("1", "true", "yes")
+MAX_SEGMENT_QA_RETRY = int(os.getenv("MAX_SEGMENT_QA_RETRY", "1"))
+# 知识库 Chunk 上下文前缀（Contextual Retrieval）
+ENABLE_CHUNK_CONTEXT_PREFIX = os.getenv("ENABLE_CHUNK_CONTEXT_PREFIX", "1").lower() in ("1", "true", "yes")
+# 记录 LLM 响应中的 prompt_cache_hit_tokens（DeepSeek 等自动前缀缓存）
+LOG_PROMPT_CACHE_USAGE = os.getenv("LOG_PROMPT_CACHE_USAGE", "1").lower() in ("1", "true", "yes")
 # 高分施工章用 LLM 精炼评标关注点（默认关闭，避免额外延迟）
 EVALUATION_FOCUS_LLM_REFINE = os.getenv("EVALUATION_FOCUS_LLM_REFINE", "0").lower() in ("1", "true", "yes")
 EVALUATION_FOCUS_REFINE_MIN_SCORE = float(os.getenv("EVALUATION_FOCUS_REFINE_MIN_SCORE", "8"))
@@ -87,6 +106,7 @@ HEADING_NUMBERING_PRESET = os.getenv("HEADING_NUMBERING_PRESET", "decimal")
 def reload_settings():
     """从 .env 重新加载 LLM 相关配置（前端保存设置后调用）。"""
     global DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL
+    global WRITER_MODEL, QA_MODEL, LLM_USE_JSON_SCHEMA
     global LLM_MAX_TOKENS, LLM_MAX_TOKENS_CEILING, CHARS_PER_TOKEN_CN
     global LLM_TEXT_MAX_CONTINUATIONS, LLM_TEMPERATURE
 
@@ -94,6 +114,9 @@ def reload_settings():
     DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
     DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
     DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+    WRITER_MODEL = os.getenv("WRITER_MODEL", "").strip()
+    QA_MODEL = os.getenv("QA_MODEL", "").strip()
+    LLM_USE_JSON_SCHEMA = os.getenv("LLM_USE_JSON_SCHEMA", "1").lower() in ("1", "true", "yes")
     LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "4096"))
     LLM_MAX_TOKENS_CEILING = int(os.getenv("LLM_MAX_TOKENS_CEILING", "8000"))
     CHARS_PER_TOKEN_CN = float(os.getenv("CHARS_PER_TOKEN_CN", "0.6"))

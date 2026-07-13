@@ -15,10 +15,12 @@ from prompts.outline_prompt import (
     build_branch_user_prompt,
     build_skeleton_user_prompt,
     get_branch_system_prompt,
-    get_knowledge_folders,
     get_reference_structure,
     get_skeleton_system_prompt,
 )
+from services.knowledge_registry import get_knowledge_folders
+from services.outline_order import sort_outline_tree_dfs
+from services.outline_service import _other_branches_for_expand
 from prompts.plan_prompt import build_plan_user_prompt, get_plan_system_prompt
 from prompts.qa_prompt import QA_SYSTEM_PROMPT, build_qa_user_prompt
 from prompts.writer_prompt import (
@@ -80,12 +82,13 @@ def _pick_outline_branch_for_preview(
     db: Session, project: Project, catalog: list[dict]
 ) -> tuple[dict, str]:
     """选取大纲分支展开预览节点，返回 (branch, stage_label)。"""
-    outline_branch = (
-        db.query(TechOutline)
-        .filter(TechOutline.project_id == project.id, TechOutline.level == 2)
-        .order_by(TechOutline.sort_order)
-        .first()
-    )
+    level2_nodes = [
+        n for n in sort_outline_tree_dfs(
+            db.query(TechOutline).filter(TechOutline.project_id == project.id).all()
+        )
+        if n.level == 2
+    ]
+    outline_branch = level2_nodes[0] if level2_nodes else None
     if outline_branch:
         return _branch_dict_from_outline(outline_branch), f"分支展开（{outline_branch.title}）"
 
@@ -133,9 +136,17 @@ def build_outline_prompt_preview(db: Session, project: Project) -> dict[str, Any
         global_info, catalog, reference_text, generation_mode=generation_mode,
     )
     preview_branch, branch_label = _pick_outline_branch_for_preview(db, project, catalog)
+    level2_nodes = [
+        _branch_dict_from_outline(n)
+        for n in sort_outline_tree_dfs(
+            db.query(TechOutline).filter(TechOutline.project_id == project.id).all()
+        )
+        if n.level == 2
+    ]
     branch_user = build_branch_user_prompt(
         global_info, preview_branch, catalog, req_dicts, knowledge_folders,
         generation_mode=generation_mode,
+        other_branches=_other_branches_for_expand(level2_nodes, preview_branch),
     )
     outline_stages = [
         _stage("outline_skeleton", "大纲骨架", get_skeleton_system_prompt(domain), skeleton_user),
@@ -188,13 +199,25 @@ def build_chapter_prompt_preview(
             )
         else:
             stages.append(
-                _stage("plan", "写作规划", get_plan_system_prompt(domain), build_plan_user_prompt(bundle))
+                _stage(
+                    "plan",
+                    "写作规划",
+                    get_plan_system_prompt(domain),
+                    build_plan_user_prompt(bundle),
+                    note="实际请求按多条 user 消息分层发送（项目上下文→衔接→检索→本章任务），利于 Prompt Cache",
+                )
             )
 
-    writer_user = build_writer_user_prompt(bundle)
-    if fix_instructions:
-        writer_user += f"\n\n## 修改要求\n{fix_instructions}"
-    stages.append(_stage("writer", "正文撰写", get_writer_system_prompt(domain), writer_user))
+    writer_user = build_writer_user_prompt(bundle, fix_instructions=fix_instructions)
+    stages.append(
+        _stage(
+            "writer",
+            "正文撰写",
+            get_writer_system_prompt(domain),
+            writer_user,
+            note="实际请求按多条 user 消息分层发送（项目上下文→衔接→检索→本章任务），利于 Prompt Cache",
+        )
+    )
 
     qa_sample = (content_for_qa or chapter.generated_content or "").strip()
     if not qa_sample:
@@ -255,13 +278,25 @@ def capture_generation_prompt_debug(
             )
         else:
             stages.append(
-                _stage("plan", "写作规划", get_plan_system_prompt(domain), build_plan_user_prompt(bundle))
+                _stage(
+                    "plan",
+                    "写作规划",
+                    get_plan_system_prompt(domain),
+                    build_plan_user_prompt(bundle),
+                    note="实际请求按多条 user 消息分层发送（项目上下文→衔接→检索→本章任务），利于 Prompt Cache",
+                )
             )
 
-    writer_user = build_writer_user_prompt(bundle)
-    if fix_instructions:
-        writer_user += f"\n\n## 修改要求\n{fix_instructions}"
-    stages.append(_stage("writer", "正文撰写", get_writer_system_prompt(domain), writer_user))
+    writer_user = build_writer_user_prompt(bundle, fix_instructions=fix_instructions)
+    stages.append(
+        _stage(
+            "writer",
+            "正文撰写",
+            get_writer_system_prompt(domain),
+            writer_user,
+            note="实际请求按多条 user 消息分层发送（项目上下文→衔接→检索→本章任务），利于 Prompt Cache",
+        )
+    )
 
     if content_for_qa:
         stages.append(
@@ -294,6 +329,9 @@ def capture_generation_prompt_debug(
     warning = bundle.get("retrieval_warning")
     if warning:
         payload["retrieval_warning"] = warning
+    route = bundle.get("retrieval_route")
+    if isinstance(route, dict) and route:
+        payload["retrieval_route"] = route
     return json.dumps(payload, ensure_ascii=False)
 
 
