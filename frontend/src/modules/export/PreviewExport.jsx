@@ -24,7 +24,7 @@ import { buildOutlineTreeData } from '../outline/helpers.jsx';
 import { useChartPreviews, renderMarkdownPreview } from '../chart/preview.js';
 import { getReviewStatusTagColor, formatReviewErrorsText } from '../../lib/chapterStatus.js';
 
-function PreviewExport({ projectId, durationDays }) {
+function PreviewExport({ projectId, durationDays, onGoGenerate }) {
   const [nodes, setNodes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
@@ -115,6 +115,15 @@ function PreviewExport({ projectId, durationDays }) {
     <Space size="small">
       {n.is_leaf === 1 && <ChapterStatusIcon status={n.review_status} />}
       <Text ellipsis style={{ maxWidth: 180 }}>{n.title}</Text>
+      {n.is_leaf === 1 && n.review_status === 'yellow' && (
+        <Tag color="orange" style={{ margin: 0, fontSize: 11 }}>待优化</Tag>
+      )}
+      {n.is_leaf === 1 && n.review_status === 'red' && (
+        <Tag color="red" style={{ margin: 0, fontSize: 11 }}>失败</Tag>
+      )}
+      {n.is_leaf === 1 && !(n.generated_content || '').trim() && n.review_status !== 'red' && (
+        <Tag style={{ margin: 0, fontSize: 11 }}>未生成</Tag>
+      )}
       {isDirty && n.id === selected && (
         <Tag color="orange" style={{ margin: 0, fontSize: 11 }}>未保存</Tag>
       )}
@@ -123,6 +132,10 @@ function PreviewExport({ projectId, durationDays }) {
 
   const selectedChapter = nodes.find((n) => n.id === selected);
   const leafCount = useMemo(() => nodes.filter((n) => n.is_leaf === 1).length, [nodes]);
+  const generatedCount = useMemo(
+    () => nodes.filter((n) => n.is_leaf === 1 && (n.generated_content || '').trim()).length,
+    [nodes],
+  );
 
   const yellowChapters = useMemo(
     () => nodes.filter((n) => n.is_leaf === 1 && n.review_status === 'yellow'),
@@ -140,7 +153,6 @@ function PreviewExport({ projectId, durationDays }) {
   const doExport = async ({
     allowYellow = false,
     allowIncomplete = false,
-    asPdf = false,
   } = {}) => {
     setExporting(true);
     try {
@@ -148,19 +160,10 @@ function PreviewExport({ projectId, durationDays }) {
       if (allowYellow) params.set('allow_yellow', 'true');
       if (allowIncomplete) params.set('allow_incomplete', 'true');
       const query = params.toString() ? `?${params.toString()}` : '';
-      const endpoint = asPdf ? 'export-pdf' : 'export';
       const res = await downloadFromApi(
-        `/projects/${projectId}/${endpoint}${query}`,
-        asPdf ? `${projectId}.pdf` : `${projectId}.docx`,
+        `/projects/${projectId}/export${query}`,
+        `${projectId}.docx`,
       );
-      if (asPdf) {
-        message.success(
-          allowIncomplete
-            ? 'PDF 已导出（含未生成正文的章节，仅保留标题）'
-            : 'PDF 已导出',
-        );
-        return;
-      }
       const compliancePassed = res.headers.get('X-Compliance-Passed') === 'true';
       const warnCount = Number(res.headers.get('X-Compliance-Warnings') || 0);
       const yellowCount = Number(res.headers.get('X-Yellow-Chapters') || 0);
@@ -182,9 +185,9 @@ function PreviewExport({ projectId, durationDays }) {
     }
   };
 
-  const confirmYellowThenExport = async (asPdf, allowIncomplete = false) => {
+  const confirmYellowThenExport = async (allowIncomplete = false) => {
     if (yellowChapters.length === 0) {
-      doExport({ allowYellow: false, allowIncomplete, asPdf });
+      doExport({ allowYellow: false, allowIncomplete });
       return;
     }
     let riskItems = yellowChapters.map((c) => ({
@@ -222,15 +225,15 @@ function PreviewExport({ projectId, durationDays }) {
           </ul>
         </div>
       ),
-      okText: asPdf ? '仍然导出 PDF' : '仍然导出 Word',
+      okText: '仍然导出 Word',
       cancelText: '取消',
-      onOk: () => doExport({ allowYellow: true, allowIncomplete, asPdf }),
+      onOk: () => doExport({ allowYellow: true, allowIncomplete }),
     });
   };
 
-  const confirmIncompleteThenExport = async (asPdf) => {
+  const confirmIncompleteThenExport = async () => {
     if (emptyChapters.length === 0) {
-      await confirmYellowThenExport(asPdf, false);
+      await confirmYellowThenExport(false);
       return;
     }
     Modal.confirm({
@@ -253,14 +256,13 @@ function PreviewExport({ projectId, durationDays }) {
           </ul>
         </div>
       ),
-      okText: asPdf ? '仍然导出 PDF' : '仍然导出 Word',
+      okText: '仍然导出 Word',
       cancelText: '取消',
-      onOk: () => confirmYellowThenExport(asPdf, true),
+      onOk: () => confirmYellowThenExport(true),
     });
   };
 
-  const handleExport = async (options = {}) => {
-    const asPdf = !!options?.asPdf;
+  const handleExport = async () => {
     if (redChapters.length > 0) {
       const preview = redChapters.slice(0, 5).map((c) => c.title).join('、');
       const more = redChapters.length > 5 ? ` 等 ${redChapters.length} 章` : '';
@@ -307,14 +309,14 @@ function PreviewExport({ projectId, durationDays }) {
             </Text>
           </div>
         ),
-        okText: asPdf ? '我知道风险，仍要导出 PDF' : '我知道风险，仍要导出 Word',
+        okText: '我知道风险，仍要导出 Word',
         cancelText: '取消',
-        onOk: () => confirmIncompleteThenExport(asPdf),
+        onOk: () => confirmIncompleteThenExport(),
       });
       return;
     }
 
-    await confirmIncompleteThenExport(asPdf);
+    await confirmIncompleteThenExport();
   };
 
   const handleTreeSelect = (keys) => {
@@ -517,8 +519,18 @@ function PreviewExport({ projectId, durationDays }) {
         <Alert
           type="info"
           showIcon
-          message="暂无章节内容"
-          description="请先完成大纲策划并生成章节正文，再回到本页预览与导出。"
+          message="暂无可生成章节"
+          description="请先返回大纲策划，完成章节结构后再生成正文。"
+        />
+      ) : generatedCount === 0 ? (
+        <Alert
+          type="info"
+          showIcon
+          message="尚未生成正文"
+          description="当前只有章节目录，请先在内容生成页生成正文，再进行编辑和 Word 导出。"
+          action={onGoGenerate ? (
+            <Button size="small" type="primary" onClick={onGoGenerate}>前往内容生成</Button>
+          ) : null}
         />
       ) : (
       <Row gutter={16} className="preview-page-layout">
@@ -651,73 +663,92 @@ function PreviewExport({ projectId, durationDays }) {
               ) : null}
 
               <div className="preview-toolbar">
-                <div className="preview-toolbar-group">
-                  <Button type="primary" ghost={isDirty} onClick={handleSave} disabled={!isDirty}>
-                    {isDirty ? '保存修改' : '已保存'}
-                  </Button>
-                  <Button loading={reviewing} onClick={handleReview} disabled={!content.trim()}>
-                    重新验章
-                  </Button>
-                  <Button onClick={openRewriteModal} disabled={!content.trim()}>选区改写</Button>
-                  <Button onClick={handleRegenerate}>单章重新生成</Button>
+                <div className="preview-toolbar-section">
+                  <Text type="secondary" className="preview-toolbar-label">内容编辑</Text>
+                  <div className="preview-toolbar-group">
+                    <Button type="primary" ghost={isDirty} onClick={handleSave} disabled={!isDirty}>
+                      {isDirty ? '保存修改' : '已保存'}
+                    </Button>
+                    <Button onClick={openRewriteModal} disabled={!content.trim()}>选区改写</Button>
+                    <Dropdown
+                      menu={{
+                        items: [
+                          {
+                            key: 'regenerate',
+                            label: '单章重新生成',
+                            onClick: handleRegenerate,
+                          },
+                          {
+                            key: 'version',
+                            label: '版本历史',
+                            disabled: !selected,
+                            onClick: () => setVersionOpen(true),
+                          },
+                          {
+                            key: 'prompt',
+                            label: '查看提示词',
+                            disabled: !selected,
+                            onClick: () => setPromptOpen(true),
+                          },
+                          { type: 'divider' },
+                          {
+                            key: 'debug',
+                            label: '导出调试包',
+                            onClick: handleExportDebug,
+                          },
+                        ],
+                      }}
+                    >
+                      <Button loading={exportingDebug}>更多</Button>
+                    </Dropdown>
+                  </div>
                 </div>
-                <div className="preview-toolbar-group preview-toolbar-group--export">
-                  <Button type="primary" loading={exporting} onClick={() => handleExport()}>
-                    导出 Word
-                    {emptyChapters.length > 0
-                      ? `（${emptyChapters.length} 章未生成）`
-                      : yellowChapters.length > 0
-                        ? `（${yellowChapters.length} 章待优化）`
-                        : ''}
-                  </Button>
-                  <Dropdown
-                    menu={{
-                      items: [
-                        {
-                          key: 'pdf',
-                          label: '导出 PDF',
-                          onClick: () => handleExport({ asPdf: true }),
-                        },
-                        { type: 'divider' },
-                        {
-                          key: 'matrix',
-                          label: '响应矩阵',
-                          onClick: () => setMatrixOpen(true),
-                        },
-                        {
-                          key: 'compliance',
-                          label: '合规报告',
-                          onClick: () => setComplianceOpen(true),
-                        },
-                        {
-                          key: 'ai',
-                          label: '检测 AI 痕迹',
-                          disabled: !content.trim(),
-                          onClick: handleDetectAiCliches,
-                        },
-                        {
-                          key: 'prompt',
-                          label: '查看提示词',
-                          disabled: !selected,
-                          onClick: () => setPromptOpen(true),
-                        },
-                        {
-                          key: 'version',
-                          label: '版本历史',
-                          disabled: !selected,
-                          onClick: () => setVersionOpen(true),
-                        },
-                        { type: 'divider' },
-                        {
-                          key: 'debug',
-                          label: '导出调试包',
-                          onClick: handleExportDebug,
-                        },
-                      ],
-                    }}
-                  >
-                    <Button loading={exporting || exportingDebug || detectingAi}>更多操作</Button>
-                  </Dropdown>
+
+                <div className="preview-toolbar-section">
+                  <Text type="secondary" className="preview-toolbar-label">质量检查</Text>
+                  <div className="preview-toolbar-group">
+                    <Button loading={reviewing} onClick={handleReview} disabled={!content.trim()}>
+                      重新验章
+                    </Button>
+                    <Dropdown
+                      menu={{
+                        items: [
+                          {
+                            key: 'ai',
+                            label: '检测 AI 痕迹',
+                            disabled: !content.trim(),
+                            onClick: handleDetectAiCliches,
+                          },
+                          {
+                            key: 'matrix',
+                            label: '响应矩阵',
+                            onClick: () => setMatrixOpen(true),
+                          },
+                          {
+                            key: 'compliance',
+                            label: '合规报告',
+                            onClick: () => setComplianceOpen(true),
+                          },
+                        ],
+                      }}
+                    >
+                      <Button loading={detectingAi}>检查报告</Button>
+                    </Dropdown>
+                  </div>
+                </div>
+
+                <div className="preview-toolbar-section preview-toolbar-section--export">
+                  <Text type="secondary" className="preview-toolbar-label">文档导出</Text>
+                  <div className="preview-toolbar-group">
+                    <Button type="primary" loading={exporting} onClick={handleExport}>
+                      导出 Word
+                      {emptyChapters.length > 0
+                        ? `（${emptyChapters.length} 章未生成）`
+                        : yellowChapters.length > 0
+                          ? `（${yellowChapters.length} 章待优化）`
+                          : ''}
+                    </Button>
+                  </div>
                 </div>
               </div>
               <Modal

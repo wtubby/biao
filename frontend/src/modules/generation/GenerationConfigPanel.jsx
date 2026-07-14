@@ -190,36 +190,23 @@ function GenerationConfigPanel({
 
   return (
     <div className={`generation-config-panel${pagesSaving ? ' is-pages-saving' : ''}`}>
-      <div className="generation-config-inline-pair">
-        <ConfigRow label="方案类型">
-          <div className="generation-config-stack">
-            <Select
-              size="small"
-              className="generation-config-select generation-config-select--wide"
-              disabled={disabled || saving}
-              value={config.bid_category || 'engineering_tech'}
-              options={bidCategoryOptions}
-              onChange={(v) => patchConfig({ bid_category: v })}
-            />
-            {activeBidCategory?.description && (
-              <Text type="secondary" className="generation-config-meta">
-                {activeBidCategory.description}
-              </Text>
-            )}
-          </div>
-        </ConfigRow>
-
-        <ConfigRow label="正文格式">
+      <ConfigRow label="方案类型">
+        <div className="generation-config-stack">
           <Select
             size="small"
-            className="generation-config-select"
+            className="generation-config-select generation-config-select--wide"
             disabled={disabled || saving}
-            value={config.body_format || 'general'}
-            options={BODY_FORMAT_OPTIONS}
-            onChange={(v) => patchConfig({ body_format: v })}
+            value={config.bid_category || 'engineering_tech'}
+            options={bidCategoryOptions}
+            onChange={(v) => patchConfig({ bid_category: v })}
           />
-        </ConfigRow>
-      </div>
+          {activeBidCategory?.description && (
+            <Text type="secondary" className="generation-config-meta">
+              {activeBidCategory.description}
+            </Text>
+          )}
+        </div>
+      </ConfigRow>
 
       <div className="generation-config-inline-pair">
         {showModeSwitch && (
@@ -243,65 +230,6 @@ function GenerationConfigPanel({
             onChange={(v) => patchConfig({ chart_density: v })}
           />
         </ConfigRow>
-      </div>
-
-      <ConfigRow label="写作惯例">
-        <Select
-          size="small"
-          className="generation-config-select generation-config-select--wide"
-          disabled={disabled || saving}
-          value={config.standards_pack || 'epc_guide'}
-          options={STANDARDS_OPTIONS}
-          onChange={(v) => patchConfig({ standards_pack: v })}
-        />
-      </ConfigRow>
-
-      <div className="generation-config-switches">
-        <label className="generation-config-switch-item">
-          <span className="generation-config-label">自有库</span>
-          <Switch
-            size="small"
-            checked={config.use_knowledge_library !== false}
-            disabled={disabled || saving}
-            onChange={(v) => patchConfig({ use_knowledge_library: v })}
-          />
-        </label>
-        <label className="generation-config-switch-item">
-          <span className="generation-config-label">以标写标</span>
-          <Switch
-            size="small"
-            checked={!!config.reference_bid_enabled}
-            disabled={disabled || saving}
-            onChange={(v) => patchConfig({ reference_bid_enabled: v })}
-          />
-        </label>
-        <label className="generation-config-switch-item">
-          <span className="generation-config-label">刚性绑定</span>
-          <Switch
-            size="small"
-            checked={config.require_risk_binding !== false}
-            disabled={disabled || saving}
-            onChange={(v) => patchConfig({ require_risk_binding: v })}
-          />
-        </label>
-        <label className="generation-config-switch-item">
-          <span className="generation-config-label">深度去痕</span>
-          <Switch
-            size="small"
-            checked={!!config.deep_humanize}
-            disabled={disabled || saving}
-            onChange={(v) => patchConfig({ deep_humanize: v })}
-          />
-        </label>
-        <label className="generation-config-switch-item">
-          <span className="generation-config-label">SmartArt</span>
-          <Switch
-            size="small"
-            checked={!!config.smartart_enabled}
-            disabled={disabled || saving}
-            onChange={(v) => patchConfig({ smartart_enabled: v })}
-          />
-        </label>
       </div>
 
       {showWordSlider && (
@@ -369,6 +297,81 @@ function GenerationConfigPanel({
           </div>
         </div>
       )}
+
+      <details className="generation-config-advanced">
+        <summary>
+          <span>高级设置</span>
+          <Text type="secondary">写作约束、知识库、参考标书与排版</Text>
+        </summary>
+        <div className="generation-config-advanced-body">
+        <ConfigRow label="正文格式">
+          <Select
+            size="small"
+            className="generation-config-select"
+            disabled={disabled || saving}
+            value={config.body_format || 'general'}
+            options={BODY_FORMAT_OPTIONS}
+            onChange={(v) => patchConfig({ body_format: v })}
+          />
+        </ConfigRow>
+        <ConfigRow label="写作惯例">
+        <Select
+          size="small"
+          className="generation-config-select generation-config-select--wide"
+          disabled={disabled || saving}
+          value={config.standards_pack || 'epc_guide'}
+          options={STANDARDS_OPTIONS}
+          onChange={(v) => patchConfig({ standards_pack: v })}
+        />
+        </ConfigRow>
+
+      <div className="generation-config-switches">
+        <label className="generation-config-switch-item">
+          <span className="generation-config-label">自有库</span>
+          <Switch
+            size="small"
+            checked={config.use_knowledge_library !== false}
+            disabled={disabled || saving}
+            onChange={(v) => patchConfig({ use_knowledge_library: v })}
+          />
+        </label>
+        <label className="generation-config-switch-item">
+          <span className="generation-config-label">以标写标</span>
+          <Switch
+            size="small"
+            checked={!!config.reference_bid_enabled}
+            disabled={disabled || saving}
+            onChange={(v) => patchConfig({ reference_bid_enabled: v })}
+          />
+        </label>
+        <label className="generation-config-switch-item">
+          <span className="generation-config-label">刚性绑定</span>
+          <Switch
+            size="small"
+            checked={config.require_risk_binding !== false}
+            disabled={disabled || saving}
+            onChange={(v) => patchConfig({ require_risk_binding: v })}
+          />
+        </label>
+        <label className="generation-config-switch-item">
+          <span className="generation-config-label">深度去痕</span>
+          <Switch
+            size="small"
+            checked={!!config.deep_humanize}
+            disabled={disabled || saving}
+            onChange={(v) => patchConfig({ deep_humanize: v })}
+          />
+        </label>
+        <label className="generation-config-switch-item">
+          <span className="generation-config-label">SmartArt</span>
+          <Switch
+            size="small"
+            checked={!!config.smartart_enabled}
+            disabled={disabled || saving}
+            onChange={(v) => patchConfig({ smartart_enabled: v })}
+          />
+        </label>
+      </div>
 
       {config.reference_bid_enabled && (
         <div className="generation-config-ref">
@@ -440,6 +443,8 @@ function GenerationConfigPanel({
           typesetting: config.typesetting_options?.defaults || config.typesetting,
         })}
       />
+        </div>
+      </details>
     </div>
   );
 }

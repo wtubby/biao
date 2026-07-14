@@ -31,6 +31,7 @@ function GenerationPanel({
   onGenerationModeChange,
   onGoEditOutline,
   onHasGeneratedChapter,
+  onGoPreview,
 }) {
   const [nodes, setNodes] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -48,6 +49,7 @@ function GenerationPanel({
   const [formatConfirmed, setFormatConfirmed] = useState(false);
   const streamDisconnectRef = useRef(null);
   const [promptOpen, setPromptOpen] = useState(false);
+  const [generationResult, setGenerationResult] = useState(null);
 
   const isBatchRunning = batchGenerating || projectStatus === 'generating';
   const canGenerateContent = outlineLocked && ['outline_locked', 'generating', 'done'].includes(projectStatus || '');
@@ -164,6 +166,12 @@ function GenerationPanel({
       streamDisconnectRef.current?.();
       setBatchGenerating(false);
       if (greenCount + yellowCount > 0) onHasGeneratedChapter?.(true);
+      setGenerationResult({
+        greenCount,
+        yellowCount,
+        redCount: data.red_count || 0,
+        compliance,
+      });
       onDone?.({ greenCount, yellowCount, redCount: data.red_count || 0 });
       loadOutline();
     }
@@ -192,6 +200,7 @@ function GenerationPanel({
   const runBatchGenerate = async (resume = false) => {
     setBatchGenerating(true);
     setPaused(false);
+    setGenerationResult(null);
     if (!resume) {
       setChapterDurations({});
     }
@@ -337,6 +346,16 @@ function GenerationPanel({
     red: leaves.filter((n) => n.review_status === 'red').length,
     pending: leaves.filter((n) => !n.generated_content && n.review_status !== 'generating').length,
   }), [leaves]);
+  const completionResult = generationResult || (
+    projectStatus === 'done' && !isBatchRunning
+      ? {
+        greenCount: statusCounts.green,
+        yellowCount: statusCounts.yellow,
+        redCount: statusCounts.red,
+        compliance: null,
+      }
+      : null
+  );
 
   const selectedReviewErrors = useMemo(
     () => parseReviewErrors(selected?.review_errors),
@@ -372,6 +391,19 @@ function GenerationPanel({
           }
           action={onGoEditOutline ? (
             <Button size="small" onClick={onGoEditOutline}>去大纲策划</Button>
+          ) : null}
+        />
+      )}
+
+      {completionResult && (
+        <Alert
+          type={completionResult.redCount > 0 ? 'warning' : 'success'}
+          showIcon
+          className="generation-result-summary"
+          message="正文生成已完成"
+          description={`通过 ${completionResult.greenCount} 章，待优化 ${completionResult.yellowCount} 章，失败 ${completionResult.redCount} 章${completionResult.compliance?.passed ? '；合规检查已通过' : ''}`}
+          action={(completionResult.greenCount + completionResult.yellowCount > 0) && onGoPreview ? (
+            <Button type="primary" onClick={onGoPreview}>进入预览与导出</Button>
           ) : null}
         />
       )}
@@ -466,6 +498,7 @@ function GenerationPanel({
             <div className="gen-page-section-title">
               <div className="shuxian" />
               <span>生成内容预览</span>
+              <Tag color="default">只读</Tag>
               {selected && (
                 <Text type="secondary" className="gen-page-preview-subtitle">
                   {selected.title}

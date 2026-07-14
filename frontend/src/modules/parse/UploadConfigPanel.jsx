@@ -1,13 +1,13 @@
 import {
   useState, useEffect, useCallback,
-  Alert, Spin, Text, message,
+  Spin, Text, message,
 } from '../../globals.js';
 
-import { setGenerationMode, setOutlineCatalogSource, fetchOutlineCatalog } from '../../api/outline.js';
+import { setGenerationMode } from '../../api/outline.js';
 import { fetchParseSummary } from '../../api/parse.js';
 import { fetchTenderDetail, updateTenderDetail } from '../../api/tenderDetail.js';
 import { Icon } from '../../components/icons.jsx';
-import { DirectorySourceSwitch, DisplayModeSwitch } from '../outline/components.jsx';
+import { DisplayModeSwitch } from '../outline/components.jsx';
 
 function ConfigRow({ label, hint, children }) {
   return (
@@ -52,34 +52,28 @@ function UploadConfigPanel({
   projectId,
   project,
   onProjectChange,
-  parseReady = false,
 }) {
   const [loading, setLoading] = useState(true);
   const [savingKey, setSavingKey] = useState('');
   const [blindBid, setBlindBid] = useState(false);
   const [blindBidAutoDetected, setBlindBidAutoDetected] = useState(false);
-  const [catalogSource, setCatalogSource] = useState('score_points');
-  const [catalogPreviews, setCatalogPreviews] = useState(null);
 
   const generationMode = project?.generation_mode || 'full';
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [detail, summary, catalog] = await Promise.all([
+      const [detail, summary] = await Promise.all([
         fetchTenderDetail(projectId).catch(() => null),
         fetchParseSummary(projectId).catch(() => null),
-        parseReady ? fetchOutlineCatalog(projectId).catch(() => null) : Promise.resolve(null),
       ]);
       if (detail?.notice?.blind_bid === true) setBlindBid(true);
       else if (detail?.notice?.blind_bid === false) setBlindBid(false);
       setBlindBidAutoDetected(!!summary?.blind_bid_auto_detected);
-      if (catalog?.source) setCatalogSource(catalog.source);
-      if (catalog?.previews) setCatalogPreviews(catalog.previews);
     } finally {
       setLoading(false);
     }
-  }, [projectId, parseReady]);
+  }, [projectId]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -136,19 +130,10 @@ function UploadConfigPanel({
     });
   };
 
-  const handleCatalogSource = (source) => {
-    if (source === catalogSource) return;
-    withSave('catalog', async () => {
-      const result = await setOutlineCatalogSource(projectId, source);
-      setCatalogSource(source);
-      if (result.previews) setCatalogPreviews(result.previews);
-    });
-  };
-
   return (
     <div className="upload-config-panel">
       <Text type="secondary" className="upload-config-panel-sub">
-        可先预选，后续步骤可继续细调
+        先设置生成偏好；目录依据统一在「大纲编辑」中选择
       </Text>
 
       {loading ? (
@@ -175,28 +160,6 @@ function UploadConfigPanel({
               onChange={handleGenerationMode}
             />
           </ConfigRow>
-
-          <ConfigRow
-            label="目录依据"
-            hint={parseReady ? '大纲阶段将按此来源初始化目录' : '解析完成后可切换'}
-          >
-            <DirectorySourceSwitch
-              value={catalogSource}
-              previews={catalogPreviews}
-              loading={savingKey === 'catalog'}
-              disabled={!parseReady}
-              onChange={handleCatalogSource}
-            />
-          </ConfigRow>
-
-          {!parseReady && (
-            <Alert
-              type="info"
-              showIcon
-              className="upload-config-tip"
-              message="上传并完成解析后，可切换目录依据"
-            />
-          )}
         </div>
       )}
 

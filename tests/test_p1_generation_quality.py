@@ -180,3 +180,70 @@ def test_writer_prompt_empty_retrieval_and_segment_and_ref():
     assert "后续段将写" in prompt
     assert "以标写标参考" in prompt
     assert "写作惯例提示" in prompt
+
+
+def test_segmented_chapter_retries_empty_content(monkeypatch):
+    from services.chapter_generation_service import _generate_segmented_chapter
+
+    calls = {"n": 0}
+
+    def fake_once(bundle, **kwargs):
+        calls["n"] += 1
+        seg_idx = bundle.get("_segment_index", 1)
+        if seg_idx == 1 and calls["n"] == 1:
+            return "", None
+        return f"第{seg_idx}段施工内容说明。", None
+
+    monkeypatch.setattr("services.chapter_generation_service._generate_once", fake_once)
+    monkeypatch.setattr("services.chapter_generation_service.ENABLE_SEGMENT_QA", False)
+
+    bundle = {
+        "content_plan": {
+            "key_points": ["要点一", "要点二", "要点三", "要点四"],
+        },
+        "guidance": {"target_words": 2000},
+    }
+    qa_context: dict = {"segment_warnings": []}
+    content, _ = _generate_segmented_chapter(
+        bundle,
+        chat_messages=None,
+        use_chat=False,
+        total_max_tokens=4000,
+        qa_context=qa_context,
+    )
+    assert calls["n"] >= 3
+    assert "第1段" in content
+    assert "第2段" in content
+    assert not qa_context["segment_warnings"]
+
+
+def test_segmented_chapter_warns_when_segment_stays_empty(monkeypatch):
+    from services.chapter_generation_service import _generate_segmented_chapter
+
+    def fake_once(bundle, **kwargs):
+        seg_idx = bundle.get("_segment_index", 1)
+        if seg_idx == 2:
+            return "", None
+        return f"第{seg_idx}段施工内容说明。", None
+
+    monkeypatch.setattr("services.chapter_generation_service._generate_once", fake_once)
+    monkeypatch.setattr("services.chapter_generation_service.ENABLE_SEGMENT_QA", False)
+    monkeypatch.setattr("services.chapter_generation_service.MAX_SEGMENT_QA_RETRY", 1)
+
+    bundle = {
+        "content_plan": {
+            "key_points": ["要点一", "要点二", "要点三", "要点四"],
+        },
+        "guidance": {"target_words": 2000},
+    }
+    qa_context: dict = {"segment_warnings": []}
+    content, _ = _generate_segmented_chapter(
+        bundle,
+        chat_messages=None,
+        use_chat=False,
+        total_max_tokens=4000,
+        qa_context=qa_context,
+    )
+    assert "第1段" in content
+    assert "第2段" not in content
+    assert any("第2/2段" in w for w in qa_context["segment_warnings"])

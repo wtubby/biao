@@ -9,6 +9,9 @@ from routers.export import validate_export_ready
 
 def _leaf(title: str, content: str = "正文", status: str = "green"):
     return SimpleNamespace(
+        id=f"leaf-{title}",
+        parent_id=None,
+        sort_order=1,
         title=title,
         is_leaf=1,
         generated_content=content,
@@ -88,7 +91,7 @@ def test_export_word_runs_compliance_before_assemble():
     chapter = _leaf("施工组织设计")
     db = MagicMock()
     db.query.return_value.filter.return_value.first.return_value = project
-    db.query.return_value.filter.return_value.order_by.return_value.all.return_value = [chapter]
+    db.query.return_value.filter.return_value.all.return_value = [chapter]
 
     out_path = MagicMock()
     out_path.exists.return_value = True

@@ -51,48 +51,58 @@ def _normalize_chart_entry(raw: Any, index: int) -> dict[str, Any] | None:
     return {"type": chart_type, "data": data, "marker": str(marker)}
 
 
-def parse_writer_output(raw: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
-    """校验并规范化 LLM 返回的章节 JSON。"""
+def parse_writer_output(raw: dict[str, Any]) -> tuple[str, dict[int, dict[str, Any]]]:
+    """校验并规范化 LLM 返回的章节 JSON。
+
+    返回的图表 dict 以 LLM 原始 embedded_charts 下标为 key，过滤无效项时不前移下标，
+    保证正文 [[CHART:N]] 与图表数据一一对应。
+    """
     validated = WriterOutputSchema.model_validate(raw)
     markdown = validated.resolved_markdown()
     charts_raw = validated.resolved_charts_raw()
 
-    charts: list[dict[str, Any]] = []
+    charts: dict[int, dict[str, Any]] = {}
     for i, item in enumerate(charts_raw):
         normalized = _normalize_chart_entry(item, i)
         if normalized:
-            charts.append(normalized)
+            charts[i] = normalized
     return markdown, charts
 
 
-def assemble_chapter_content(markdown_content: str, embedded_charts: list[dict[str, Any]]) -> str:
+def assemble_chapter_content(
+    markdown_content: str,
+    embedded_charts: dict[int, dict[str, Any]],
+) -> str:
     """将结构化输出组装为带 [TYPE: {...}] 占位符的正文。"""
     text = (markdown_content or "").strip()
     if not embedded_charts:
         return text
 
-    placeholders: list[str] = []
-    for i, chart in enumerate(embedded_charts):
-        placeholders.append(format_chart_placeholder(chart["type"], chart["data"]))
+    placeholders: dict[int, str] = {
+        i: format_chart_placeholder(chart["type"], chart["data"])
+        for i, chart in embedded_charts.items()
+    }
 
     def _replace_marker(match: re.Match[str]) -> str:
         idx = int(match.group(1))
-        if 0 <= idx < len(placeholders):
-            return placeholders[idx]
-        return match.group(0)
+        return placeholders.get(idx, match.group(0))
 
     if _CHART_MARKER_RE.search(text):
         assembled = _CHART_MARKER_RE.sub(_replace_marker, text)
-        # 未替换的图表追加到文末
-        used = {int(m.group(1)) for m in _CHART_MARKER_RE.finditer(text) if int(m.group(1)) < len(placeholders)}
-        trailing = [placeholders[i] for i in range(len(placeholders)) if i not in used]
+        used = {
+            int(m.group(1))
+            for m in _CHART_MARKER_RE.finditer(text)
+            if int(m.group(1)) in placeholders
+        }
+        trailing = [placeholders[i] for i in sorted(placeholders) if i not in used]
         if trailing:
             assembled = assembled.rstrip() + "\n\n" + "\n".join(trailing)
         return assembled.strip()
 
+    ordered = [placeholders[i] for i in sorted(placeholders)]
     if text:
-        return text + "\n\n" + "\n".join(placeholders)
-    return "\n".join(placeholders)
+        return text + "\n\n" + "\n".join(ordered)
+    return "\n".join(ordered)
 
 
 def structured_output_to_content(raw: dict[str, Any]) -> str:

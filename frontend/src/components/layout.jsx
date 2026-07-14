@@ -1,10 +1,10 @@
 import {
   useState, useCallback, useEffect,
-  Button, Tag, Space, Alert, Title, Text,
+  Button, Tag, Space, Alert, Title, Text, Tooltip,
 } from '../globals.js';
 
 import { Icon } from './icons.jsx';
-import { STEP_ORDER } from '../constants/workflow.js';
+import { PRIMARY_STEP_ORDER, getCompletedPrimarySteps } from '../constants/workflow.js';
 import { PROJECT_STATUS_LABELS } from '../constants/project.js';
 import { apiFetch } from '../api/client.js';
 function PageHeader({ title, description, extra, tags }) {
@@ -20,7 +20,18 @@ function PageHeader({ title, description, extra, tags }) {
   );
 }
 
-function StepFooter({ extra, onPrev, onNext, prevLabel, nextLabel, prevDisabled, nextDisabled, nextLoading }) {
+function StepFooter({ extra, onPrev, onNext, prevLabel, nextLabel, prevDisabled, nextDisabled, nextLoading, nextDisabledReason }) {
+  const nextButton = (
+    <Button
+      type="primary"
+      onClick={onNext}
+      disabled={nextDisabled}
+      loading={nextLoading}
+    >
+      {nextLabel || '下一步'}
+    </Button>
+  );
+
   return (
     <div className="step-footer">
       <div className="step-footer-extra">{extra}</div>
@@ -31,14 +42,9 @@ function StepFooter({ extra, onPrev, onNext, prevLabel, nextLabel, prevDisabled,
           </Button>
         )}
         {onNext && (
-          <Button
-            type="primary"
-            onClick={onNext}
-            disabled={nextDisabled}
-            loading={nextLoading}
-          >
-            {nextLabel || '下一步'}
-          </Button>
+          nextDisabled && nextDisabledReason
+            ? <Tooltip title={nextDisabledReason}>{nextButton}</Tooltip>
+            : nextButton
         )}
       </Space>
     </div>
@@ -46,21 +52,12 @@ function StepFooter({ extra, onPrev, onNext, prevLabel, nextLabel, prevDisabled,
 }
 
 function getWorkflowProgressByStatus(status) {
-  // STEP_ORDER: upload, confirm, commercial, facts, outline, generate, preview
-  const doneMap = {
-    draft: 0,
-    parsing: 1,
-    confirming: 2,
-    planning: 4,
-    outline_locked: 5,
-    generating: 5,
-    done: STEP_ORDER.length,
-  };
-  const done = doneMap[status] ?? 0;
+  const done = getCompletedPrimarySteps(status).length;
+  const total = PRIMARY_STEP_ORDER.length;
   return {
     done,
-    total: STEP_ORDER.length,
-    percent: Math.round((done / STEP_ORDER.length) * 100),
+    total,
+    percent: total ? Math.round((done / total) * 100) : 0,
     label: PROJECT_STATUS_LABELS[status] || status,
   };
 }

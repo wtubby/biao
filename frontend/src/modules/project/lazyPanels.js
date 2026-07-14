@@ -5,7 +5,6 @@ function named(importFn, exportName) {
 }
 
 const TenderDetailPanel = named(() => import('../confirm/TenderDetailPanel.jsx'), 'TenderDetailPanel');
-const GlobalFactsPanel = named(() => import('../facts/GlobalFactsPanel.jsx'), 'GlobalFactsPanel');
 const OutlineEditor = named(() => import('../outline/OutlineEditor.jsx'), 'OutlineEditor');
 const GenerationPanel = named(() => import('../generation/GenerationPanel.jsx'), 'GenerationPanel');
 const PreviewExport = named(() => import('../export/PreviewExport.jsx'), 'PreviewExport');
@@ -14,7 +13,6 @@ const ParseProgressPanel = named(() => import('../parse/ParseProgressPanel.jsx')
 
 export {
   TenderDetailPanel,
-  GlobalFactsPanel,
   OutlineEditor,
   GenerationPanel,
   PreviewExport,

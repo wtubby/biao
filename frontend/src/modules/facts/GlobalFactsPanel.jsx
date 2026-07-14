@@ -6,7 +6,7 @@ import {
 import { apiFetch } from '../../api/client.js';
 import { Icon } from '../../components/icons.jsx';
 
-function GlobalFactsPanel({ projectId }) {
+function GlobalFactsPanel({ projectId, title = '全局写作约束' }) {
   const [facts, setFacts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [editingId, setEditingId] = useState(null);
@@ -96,11 +96,12 @@ function GlobalFactsPanel({ projectId }) {
     <Card
       title={(
         <Space>
-          全局事实变量
+          {title}
           <Tag>可选</Tag>
         </Space>
       )}
-      className="section-card"
+      className="outline-facts-card"
+      size="small"
       variant="borderless"
       extra={<Button type="primary" size="small" onClick={handleAdd}>+ 新增分组</Button>}
     >
@@ -108,13 +109,13 @@ function GlobalFactsPanel({ projectId }) {
         type="info"
         showIcon
         style={{ marginBottom: 16 }}
-        message="本步骤为可选"
-        description="工程名称、电压等级、工期等核心参数请在「确认评分项」中维护。此处仅补充可扩展事实分组（人名、品牌、关键数字等），生成正文时注入提示词。不需要时可直接点击底部「跳过，进入大纲」。"
+        message="用于保持全文表述一致"
+        description="工程名称、电压等级、工期等核心参数仍在「确认评分项」中维护。此处可补充人名、品牌、关键数字和统一术语，生成正文时将作为全局约束注入；不需要可直接留空。"
       />
       <Spin spinning={loading}>
         {facts.length === 0 && !loading ? (
           <div className="facts-empty-state">
-            <Text type="secondary">暂无事实分组。可新增，或跳过本步骤继续大纲策划。</Text>
+            <Text type="secondary">暂无写作约束，可按需新增人名、品牌、关键数字或统一术语。</Text>
           </div>
         ) : null}
         {facts.map((fact, index) => (

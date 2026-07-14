@@ -65,15 +65,15 @@ NUMBER_FORMAT_LABELS = {
     "none": "—",
 }
 
-# (numFmt, lvlText) — lvlText 中 %N 对应 OOXML 多级编号占位
-_NUMBER_FORMAT_DEFS: dict[str, tuple[str, str] | None] = {
-    "cn_dun": ("chineseCounting", "%1、"),
-    "cn_paren_dun": ("chineseCounting", "（%2）、"),
-    "decimal_dun": ("decimal", "%3、"),
-    "decimal_1_2": ("decimal", "%1.%2"),
-    "decimal_1_2_3": ("decimal", "%1.%2.%3"),
-    "decimal_full": ("decimal", "%1.%2.%3.%4"),
-    "decimal": ("decimal", "%1"),
+# (numFmt, template) — 单级模板用 {n} 表示当前 ilvl 计数器；整型表示多级点号深度
+_NUMBER_FORMAT_DEFS: dict[str, tuple[str, str | int] | None] = {
+    "cn_dun": ("chineseCounting", "{n}、"),
+    "cn_paren_dun": ("chineseCounting", "（{n}）、"),
+    "decimal_dun": ("decimal", "{n}、"),
+    "decimal_1_2": ("decimal", 2),
+    "decimal_1_2_3": ("decimal", 3),
+    "decimal_full": ("decimal", 4),
+    "decimal": ("decimal", "{n}"),
     "none": None,
 }
 
@@ -277,6 +277,15 @@ def _apply_level_style(paragraph: Paragraph, level_cfg: dict[str, Any]) -> None:
         _set_run_font(run, font, size_pt, bold=bold, color=color)
 
 
+def _resolve_lvl_text(spec: str | int, ilvl: int) -> str:
+    """按实际 ilvl 生成 OOXML lvlText，避免格式定义里写死 %N 层级。"""
+    if isinstance(spec, int):
+        depth = spec
+        start_ilvl = max(0, ilvl - depth + 1)
+        return ".".join(f"%{i + 1}" for i in range(start_ilvl, start_ilvl + depth))
+    return spec.replace("{n}", f"%{ilvl + 1}")
+
+
 def _make_custom_lvl(ilvl: int, num_fmt: str, lvl_text: str) -> OxmlElement:
     lvl = OxmlElement("w:lvl")
     lvl.set(qn("w:ilvl"), str(ilvl))
@@ -319,7 +328,7 @@ def _register_custom_numbering(doc: Document, typesetting: dict[str, dict[str, A
         fmt = _NUMBER_FORMAT_DEFS.get(fmt_id)
         if fmt is None:
             continue
-        level_defs.append((ilvl, fmt[0], fmt[1]))
+        level_defs.append((ilvl, fmt[0], _resolve_lvl_text(fmt[1], ilvl)))
 
     if not level_defs:
         return None

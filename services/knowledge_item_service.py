@@ -382,6 +382,8 @@ def search_knowledge_items(
     project_id: str,
     db: Session,
     top_k: int = 5,
+    *,
+    use_vector: bool = True,
 ) -> list[str]:
     items = list_items(folder_path, project_id, db)
     if not items:
@@ -390,7 +392,7 @@ def search_knowledge_items(
         return []
 
     lexical_ranks = _lexical_rank_items(items, query)
-    semantic_ranks = _semantic_rank_items(items, query)
+    semantic_ranks = _semantic_rank_items(items, query) if use_vector else []
     if semantic_ranks:
         merged = rrf_merge([lexical_ranks, semantic_ranks])
     else:

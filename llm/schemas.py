@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class QAResult(BaseModel):
@@ -63,3 +63,9 @@ class WriterOutputSchema(BaseModel):
     def resolved_charts_raw(self) -> list[dict[str, Any]]:
         charts = self.embedded_charts or self.charts or []
         return [c for c in charts if isinstance(c, dict)]
+
+    @model_validator(mode="after")
+    def _require_non_empty_markdown(self) -> "WriterOutputSchema":
+        if not self.resolved_markdown():
+            raise ValueError("markdown_content 或 content 必须为非空字符串")
+        return self

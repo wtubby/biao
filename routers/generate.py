@@ -40,8 +40,8 @@ class SelectionRewriteRequest(BaseModel):
     instruction: str
     context_before: str | None = None
     context_after: str | None = None
-    selection_start: int | None = None
-    selection_end: int | None = None
+    selection_start: int
+    selection_end: int
 
 
 class DetectAiClichesRequest(BaseModel):

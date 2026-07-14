@@ -10,7 +10,7 @@ export const MACRO_WORKFLOW_STEPS = [
     key: 'confirm',
     label: '核对配置',
     shortLabel: '核对',
-    internalSteps: ['confirm', 'facts'],
+    internalSteps: ['confirm'],
   },
   {
     key: 'outline',
@@ -35,15 +35,28 @@ export function getMacroStepIndex(macroKey) {
   return MACRO_WORKFLOW_STEPS.findIndex((step) => step.key === macroKey);
 }
 
-/** @param {string} currentPage @param {Record<string, boolean>} stepAccess */
-export function getMacroWorkflowState(currentPage, stepAccess) {
+const COMPLETED_MACRO_STEPS_BY_STATUS = {
+  draft: [],
+  parsing: [],
+  confirming: ['parse'],
+  planning: ['parse', 'confirm'],
+  outline_locked: ['parse', 'confirm', 'outline'],
+  generating: ['parse', 'confirm', 'outline'],
+  done: MACRO_WORKFLOW_STEPS.map((step) => step.key),
+};
+
+/**
+ * 当前页面只决定高亮位置；完成状态始终来自项目状态，
+ * 避免查看历史页面时进度倒退或跳到未来页面时虚增。
+ */
+export function getMacroWorkflowState(currentPage, stepAccess, projectStatus) {
   const currentMacroKey = getMacroStepKey(currentPage);
-  const currentMacroIndex = getMacroStepIndex(currentMacroKey);
+  const completedKeys = COMPLETED_MACRO_STEPS_BY_STATUS[projectStatus] || [];
 
   return MACRO_WORKFLOW_STEPS.map((step, index) => {
     const accessible = step.internalSteps.some((key) => stepAccess[key]);
     const isCurrent = step.key === currentMacroKey;
-    const isDone = index < currentMacroIndex;
+    const isDone = completedKeys.includes(step.key);
     return {
       ...step,
       index,

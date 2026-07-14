@@ -14,10 +14,7 @@ from config import (
 )
 from llm.llm_client import call_llm_json, call_llm_text
 from llm.schemas import WriterOutputSchema
-from prompts.plan_prompt import (
-    build_plan_chat_messages,
-    build_plan_user_messages,
-)
+from prompts.plan_prompt import build_plan_chat_messages
 from prompts.writer_prompt import (
     SUMMARY_SYSTEM_PROMPT,
     build_writer_chat_messages,
@@ -310,6 +307,7 @@ def _generate_segmented_chapter(
         if fix_instructions:
             fix_seg = f"## 修改要求（整章修复，各段均需落实）\n{fix_instructions}"
 
+        segment_label = f"第{idx + 1}/{len(groups)}段"
         part = ""
         for seg_attempt in range(MAX_SEGMENT_QA_RETRY + 1):
             content, messages = _generate_once(
@@ -321,6 +319,26 @@ def _generate_segmented_chapter(
             )
             part = (content or "").strip()
             if not part:
+                if seg_attempt < MAX_SEGMENT_QA_RETRY:
+                    logger.warning(
+                        "分段 %s 生成为空，重试（%d/%d）",
+                        segment_label,
+                        seg_attempt + 1,
+                        MAX_SEGMENT_QA_RETRY,
+                    )
+                    continue
+                points_preview = "；".join(group[:3])
+                if len(group) > 3:
+                    points_preview += "…"
+                logger.warning(
+                    "分段 %s 生成为空，已跳过（要点：%s）",
+                    segment_label,
+                    points_preview,
+                )
+                if qa_context is not None:
+                    qa_context.setdefault("segment_warnings", []).append(
+                        f"分段 {segment_label} 生成为空已跳过，对应要点未写入正文"
+                    )
                 break
 
             if (
@@ -329,7 +347,6 @@ def _generate_segmented_chapter(
                 and qa_context.get("project")
                 and qa_context.get("chapter")
             ):
-                segment_label = f"第{idx + 1}/{len(groups)}段"
                 hard_errors, soft = run_segment_qa(
                     part,
                     qa_context["project"],

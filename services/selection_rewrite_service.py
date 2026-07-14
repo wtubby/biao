@@ -65,8 +65,8 @@ def apply_selection_rewrite(
     instruction: str,
     context_before: str = "",
     context_after: str = "",
-    selection_start: int | None = None,
-    selection_end: int | None = None,
+    selection_start: int,
+    selection_end: int,
 ) -> tuple[TechOutline, str, str]:
     """校验选区、改写、落库并验章。返回 (chapter, original_text, new_text)。"""
     if chapter.is_leaf != 1:
@@ -82,16 +82,12 @@ def apply_selection_rewrite(
         raise HTTPException(400, "选中文本过长，请缩小选区后重试")
 
     full_content = chapter.generated_content or ""
-    if selection_start is not None and selection_end is not None:
-        start, end = selection_start, selection_end
-        if 0 <= start < end <= len(full_content):
-            actual = full_content[start:end]
-            if actual.strip() != selected.strip():
-                raise HTTPException(400, "选区与正文不一致，请重新选中后重试")
-        else:
-            raise HTTPException(400, "选区位置无效，请重新选中后重试")
-    elif selected not in full_content:
-        raise HTTPException(400, "选中文本与当前章节正文不匹配，请重新选中")
+    start, end = selection_start, selection_end
+    if not (0 <= start < end <= len(full_content)):
+        raise HTTPException(400, "选区位置无效，请重新选中后重试")
+    actual = full_content[start:end]
+    if actual.strip() != selected.strip():
+        raise HTTPException(400, "选区与正文不一致，请重新选中后重试")
 
     new_text = rewrite_selection(
         chapter,
@@ -102,10 +98,7 @@ def apply_selection_rewrite(
         context_after=context_after or "",
     )
 
-    if selection_start is not None and selection_end is not None:
-        updated_content = full_content[:selection_start] + new_text + full_content[selection_end:]
-    else:
-        updated_content = full_content.replace(selected, new_text, 1)
+    updated_content = full_content[:start] + new_text + full_content[end:]
 
     archive_chapter_snapshot(db, chapter, "rewrite")
     chapter.generated_content = updated_content

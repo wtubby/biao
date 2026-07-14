@@ -383,7 +383,9 @@ def retrieve_detailed(
 
         item_count = get_folder_item_count(folder, project_id, db)
         if item_count > 0:
-            chunks = search_knowledge_items(query, folder, project_id, db, top_k)
+            chunks = search_knowledge_items(
+                query, folder, project_id, db, top_k, use_vector=use_vector,
+            )
             if chunks:
                 return RetrievalResult(chunks, knowledge_available=True)
             logger.info(

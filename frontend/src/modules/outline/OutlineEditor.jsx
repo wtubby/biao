@@ -25,10 +25,11 @@ import {
 import { fetchRequirements } from '../../api/requirements.js';
 import { fetchKnowledgeFolders } from '../../api/knowledge.js';
 import { PromptInspectorDrawer } from '../../components/PromptInspectorDrawer.jsx';
-import { OutlineStepRow, OutlineStepNav, DirectorySourceSwitch, DisplayModeSwitch } from './components.jsx';
+import { OutlineStepNav, DirectorySourceSwitch, DisplayModeSwitch } from './components.jsx';
 import { OutlineTreeEditor } from './OutlineTreeEditor.jsx';
 import { KnowledgeItemsDrawer } from '../knowledge/KnowledgeItemsDrawer.jsx';
 import { useKnowledgeFolder } from '../knowledge/useKnowledgeFolder.js';
+import { GlobalFactsPanel } from '../facts/GlobalFactsPanel.jsx';
 import {
   getOrderedLeaves,
   getNodeDescendantIds, getNextSortOrder, recomputeOutlineStructure,
@@ -47,6 +48,7 @@ function OutlineEditor({
   const [loading, setLoading] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [locking, setLocking] = useState(false);
   const [validating, setValidating] = useState(false);
   const [validation, setValidation] = useState(null);
   const [locked, setLocked] = useState(false);
@@ -74,6 +76,7 @@ function OutlineEditor({
   const LONG_LEAF_SPLIT_THRESHOLD = 1500;
   const knowledge = useKnowledgeFolder(projectId);
   const autoFilledScoreRef = useRef(false);
+  const statusSyncAttemptedRef = useRef(false);
   const outlineNodes = useMemo(() => normalizeOutlineNodes(nodes), [nodes]);
 
   const applyCatalogSource = useCallback(async (source, { silent = false } = {}) => {
@@ -214,9 +217,6 @@ function OutlineEditor({
 
   const goWizardStep = (num) => {
     setWizardStep(num);
-    requestAnimationFrame(() => {
-      document.getElementById(`outline-step-${num}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    });
   };
 
   const handleSaveCatalog = async () => {
@@ -358,12 +358,12 @@ function OutlineEditor({
 
   const handleLock = async () => {
     if (!outlineNodes.length) { message.warning('请先生成大纲后再锁定'); return; }
+    setLocking(true);
     try {
       const result = await lockOutline(projectId);
-      message.success('大纲已锁定，可点击底部「下一步：内容生成」继续');
+      message.success('大纲已锁定，正在进入内容生成');
       setLocked(true);
       setWizardStep(3);
-      await load();
       onLocked?.(result);
     } catch (e) {
       message.error(e.message);
@@ -372,6 +372,8 @@ function OutlineEditor({
       if (result && !result.passed) {
         goWizardStep(2);
       }
+    } finally {
+      setLocking(false);
     }
   };
 
@@ -460,6 +462,23 @@ function OutlineEditor({
   // 节点已锁但项目仍为 planning：状态不同步，需重新锁定以推进 status
   const statusReady = ['outline_locked', 'generating', 'done'].includes(projectStatus);
   const needsStatusSync = locked && !statusReady;
+
+  useEffect(() => {
+    if (!needsStatusSync || loading || statusSyncAttemptedRef.current) return;
+    statusSyncAttemptedRef.current = true;
+    setLocking(true);
+    lockOutline(projectId)
+      .then((result) => {
+        message.success('已自动同步大纲锁定状态，正在进入内容生成');
+        onLocked?.(result);
+      })
+      .catch(() => {
+        // 保留手动同步入口，避免历史数据校验失败时阻塞页面。
+        statusSyncAttemptedRef.current = false;
+      })
+      .finally(() => setLocking(false));
+  }, [needsStatusSync, loading, projectId, onLocked]);
+
   const orderedLeaves = useMemo(() => getOrderedLeaves(outlineNodes), [outlineNodes]);
   const wordEstimate = useMemo(() => {
     const leaves = orderedLeaves;
@@ -537,400 +556,373 @@ function OutlineEditor({
     { num: 3, shortTitle: '锁定', title: '确认锁定', done: step3Done },
   ];
 
-  const phase2Summary = step2Done
-    ? `${outlineNodes.length} 个节点 · ${leafCount} 个叶子 · ${guidanceCount} 个含写作指导`
-    : step1Done
-      ? '目录已保存，待 AI 深化'
-      : '请先完成定目录';
-
   return (
     <Card
-      title={
+      title={(
         <Space>
           大纲策划
           {locked && <Tag color="green">已锁定</Tag>}
         </Space>
-      }
-      className="section-card"
+      )}
+      className="section-card outline-workspace-card"
+      variant="borderless"
+      style={{ marginTop: 0 }}
     >
       {loading && outlineNodes.length === 0 && !generating ? (
         <div className="outline-page-state">
           <Spin tip="加载大纲…" />
         </div>
       ) : (
-      <>
-      {locked && statusReady && (
-        <Alert
-          type="info"
-          showIcon
-          message="大纲已锁定，已解锁内容生成"
-          description="锁定表示章节结构已确认，可进入内容生成。仍可在本页手动增删改章节、写作要点与评分项绑定；修改后请保存。确认无误后点击底部「下一步：内容生成」。"
-          style={{ marginBottom: 16 }}
-        />
-      )}
-      {needsStatusSync && (
-        <Alert
-          type="warning"
-          showIcon
-          message="大纲节点已锁，但项目状态仍为「planning」，无法生成正文"
-          description="请在下方「确认锁定」中再次点击「锁定并继续」，将状态同步为可生成。"
-          style={{ marginBottom: 16 }}
-        />
-      )}
-
-      <OutlineStepNav
-        steps={wizardNavSteps}
-        current={wizardStep}
-        onSelect={goWizardStep}
-      />
-
-      {/* ── 阶段 1：定目录 ── */}
-      <div id="outline-step-1">
-      <OutlineStepRow
-        num={1}
-        active={wizardStep === 1}
-        done={step1Done}
-        expanded={wizardStep === 1}
-        onToggle={() => goWizardStep(1)}
-        summary={step1Done ? `已识别 ${catalogCount} 个章节` : '尚未保存目录'}
-        title="定目录"
-        subtitle={
-          catalogSource === 'score_points'
-            ? '有已确认评分项时自动填入一级目录；也可重新填入或手写。无评分项请切换「按参考格式生成」。'
-            : '使用本标书核对页中的「投标文件参考格式」生成目录；无提取结果时可手动粘贴。'
-        }
-      >
-        <DirectorySourceSwitch
-          value={catalogSource}
-          disabled={locked || switchingSource}
-          loading={switchingSource}
-          previews={catalogPreviews}
-          onChange={handleCatalogSourceChange}
-        />
-        {catalogPreviews?.[catalogSource]?.hint && (
-          <Alert
-            type={catalogPreviews[catalogSource].available ? 'info' : 'warning'}
-            showIcon
-            style={{ marginBottom: 10 }}
-            message={catalogPreviews[catalogSource].hint}
-          />
-        )}
-        <Input.TextArea
-          rows={7}
-          value={catalogText}
-          disabled={locked}
-          placeholder={
-            catalogSource === 'score_points'
-              ? '有已确认评分项时将自动填入；也可点下方次要按钮生成，或直接手写目录。'
-              : '将填入本标书「投标文件参考格式」。示例：\n（一）工程概况\n（二）施工组织设计\n（三）施工方案及技术措施\n  1. 基础施工\n  2. 杆塔组立\n  3. 架线施工'
-          }
-          onChange={(e) => setCatalogText(e.target.value)}
-          style={{ marginBottom: 8 }}
-        />
-        {catalogSource === 'reference_format'
-          && templates.length > 0
-          && catalogPreviews?.reference_format?.available === false && (
-          <Space wrap style={{ marginBottom: 8 }}>
-            <Text type="secondary" style={{ fontSize: 12 }}>无本标书参考格式时，可选用预设模板：</Text>
-            <Select
-              allowClear
-              placeholder="选择预设模板（兜底）"
-              style={{ minWidth: 260 }}
-              disabled={locked}
-              options={templates.map((tpl) => ({
-                value: tpl.id,
-                label: tpl.description ? `${tpl.name}（${tpl.description}）` : tpl.name,
-              }))}
-              onChange={handleApplyTemplate}
-            />
-          </Space>
-        )}
-        <Space wrap align="center">
-          <Button
-            type="primary"
-            loading={loading && !generating && !switchingSource}
-            disabled={locked}
-            onClick={handleSaveCatalog}
-          >
-            保存目录
-          </Button>
-          {catalogSource === 'score_points' && (
-            <Button
-              type="link"
-              loading={switchingSource}
-              disabled={locked || catalogPreviews?.score_points?.available === false}
-              title={
-                catalogPreviews?.score_points?.available === false
-                  ? (catalogPreviews?.score_points?.hint || '请先确认评分项')
-                  : undefined
-              }
-              onClick={handleGenerateFromScorePoints}
-              style={{ paddingInline: 4 }}
-            >
-              按评分点重新填入
-            </Button>
-          )}
-          {catalogSource === 'reference_format' && (
-            <Button
-              type="link"
-              loading={switchingSource}
-              disabled={locked || catalogPreviews?.reference_format?.available === false}
-              title={
-                catalogPreviews?.reference_format?.available === false
-                  ? (catalogPreviews?.reference_format?.hint || '本标书暂无参考格式，请回核对页补充或手动粘贴')
-                  : undefined
-              }
-              onClick={handleApplyReferenceFormat}
-              style={{ paddingInline: 4 }}
-            >
-              应用本标书参考格式
-            </Button>
-          )}
-          {step1Done && (
-            <Text type="success" style={{ fontSize: 12 }}>已识别 {catalogCount} 个章节</Text>
-          )}
-        </Space>
-      </OutlineStepRow>
-      </div>
-
-      {/* ── 阶段 2：深化并审核 ── */}
-      <div id="outline-step-2">
-      <OutlineStepRow
-        num={2}
-        active={wizardStep === 2}
-        done={step2Done}
-        expanded={wizardStep === 2}
-        onToggle={() => goWizardStep(2)}
-        summary={phase2Summary}
-        title="深化并审核"
-        subtitle={
-          generationMode === 'compact'
-            ? '精简版：章节更少、目标字数更短。深化后可在下方审树、改绑定；绑定检查为可选辅助。'
-            : '满血版：结构更完整。深化后可在下方审树、改写作要点与评分项绑定；绑定检查为可选辅助。'
-        }
-      >
-        <Space direction="vertical" style={{ width: '100%' }} size="middle">
-          <Space wrap align="center">
-            <Text type="secondary" style={{ fontSize: 12 }}>生成档位</Text>
-            <DisplayModeSwitch
-              value={generationMode}
-              disabled={locked}
-              loading={switchingMode}
-              onChange={handleGenerationModeChange}
-            />
-            {step2Done && generationMode === 'compact' && (
-              <Text type="secondary" style={{ fontSize: 12 }}>切换档位后建议重新 AI 深化</Text>
-            )}
-          </Space>
-          <Space wrap>
-            <Button
-              type="primary"
-              loading={generating}
-              disabled={!step1Done || locked}
-              onClick={handleGenerate}
-            >
-              {step2Done ? '重新 AI 深化' : 'AI 深化大纲'}
-            </Button>
-            <Button
-              loading={splittingLong}
-              disabled={!step2Done || locked || splitPreviewCount === 0}
-              onClick={() => handleSplitLongLeaves()}
-            >
-              拆分长章节{splitPreviewCount > 0 ? ` (${splitPreviewCount})` : ''}
-            </Button>
-            <Button disabled={!step1Done} onClick={() => setPromptOpen(true)}>
-              查看提示词
-            </Button>
-            {!step1Done && <Text type="secondary" style={{ fontSize: 12 }}>请先完成定目录</Text>}
-          </Space>
-          {generating && (
-            <Alert
-              type="info"
-              showIcon
-              message="正在调用 AI 深化大纲…"
-              description="系统正在生成骨架并逐支展开章节，通常需要 1～3 分钟，请勿关闭页面。"
-            />
-          )}
-          {outlineWarnings.length > 0 && (
+        <div className="outline-workspace">
+          {needsStatusSync && (
             <Alert
               type="warning"
               showIcon
-              message={`${outlineWarnings.length} 条大纲质量提示`}
-              description={(
-                <div>
-                  {outlineWarnings.map((w, i) => (
-                    <div key={i}>• {w}</div>
-                  ))}
-                </div>
-              )}
+              message="大纲节点已锁，但项目状态仍为「planning」，无法生成正文"
+              description={locking ? '正在自动同步项目状态…' : '自动同步未成功，请在「确认锁定」中重新锁定。'}
+              style={{ marginBottom: 12 }}
             />
           )}
 
-          {step2Done && !generating && (
-            <Space wrap>
-              <Button type="default" onClick={() => goWizardStep(3)}>
-                下一步：确认锁定
-              </Button>
-            </Space>
-          )}
-          {step2Done && (
-            <>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
-                <Text type="secondary" style={{ fontSize: 12 }}>
-                  {outlineNodes.length} 个节点 · {leafCount} 个叶子 · {guidanceCount} 个含写作指导
-                </Text>
-                <Button
-                  size="small"
-                  loading={validating}
-                  disabled={outlineNodes.length === 0}
-                  onClick={() => handleValidate()}
-                >
-                  检查绑定
-                </Button>
+          <OutlineStepNav
+            steps={wizardNavSteps}
+            current={wizardStep}
+            onSelect={goWizardStep}
+          />
+
+          <div className="outline-workspace-body">
+            {wizardStep === 1 && (
+              <div className="outline-stage outline-catalog-stage">
+                <div className="outline-catalog-side">
+                  <div className="outline-stage-title">目录依据</div>
+                  <p className="outline-stage-desc">
+                    {catalogSource === 'score_points'
+                      ? '有已确认评分项时自动填入一级目录；也可重新填入或手写。无评分项请切换「按参考格式生成」。'
+                      : '使用本标书核对页中的「投标文件参考格式」生成目录；无提取结果时可手动粘贴。'}
+                  </p>
+                  <DirectorySourceSwitch
+                    value={catalogSource}
+                    disabled={locked || switchingSource}
+                    loading={switchingSource}
+                    previews={catalogPreviews}
+                    onChange={handleCatalogSourceChange}
+                  />
+                  {catalogPreviews?.[catalogSource]?.hint && (
+                    <Alert
+                      type={catalogPreviews[catalogSource].available ? 'info' : 'warning'}
+                      showIcon
+                      style={{ marginTop: 12 }}
+                      message={catalogPreviews[catalogSource].hint}
+                    />
+                  )}
+                  {catalogSource === 'reference_format'
+                    && templates.length > 0
+                    && catalogPreviews?.reference_format?.available === false && (
+                    <div className="outline-catalog-template">
+                      <Text type="secondary" style={{ fontSize: 12 }}>无本标书参考格式时，可选用预设模板</Text>
+                      <Select
+                        allowClear
+                        placeholder="选择预设模板（兜底）"
+                        style={{ width: '100%', marginTop: 8 }}
+                        disabled={locked}
+                        options={templates.map((tpl) => ({
+                          value: tpl.id,
+                          label: tpl.description ? `${tpl.name}（${tpl.description}）` : tpl.name,
+                        }))}
+                        onChange={handleApplyTemplate}
+                      />
+                    </div>
+                  )}
+                </div>
+
+                <div className="outline-catalog-editor">
+                  <div className="outline-stage-title">目录文本</div>
+                  <Input.TextArea
+                    className="outline-catalog-textarea"
+                    value={catalogText}
+                    disabled={locked}
+                    placeholder={
+                      catalogSource === 'score_points'
+                        ? '有已确认评分项时将自动填入；也可点下方次要按钮生成，或直接手写目录。'
+                        : '将填入本标书「投标文件参考格式」。示例：\n（一）工程概况\n（二）施工组织设计\n（三）施工方案及技术措施\n  1. 基础施工\n  2. 杆塔组立\n  3. 架线施工'
+                    }
+                    onChange={(e) => setCatalogText(e.target.value)}
+                  />
+                  <div className="outline-stage-actions">
+                    <Button
+                      type="primary"
+                      loading={loading && !generating && !switchingSource}
+                      disabled={locked}
+                      onClick={handleSaveCatalog}
+                    >
+                      保存目录并继续
+                    </Button>
+                    {catalogSource === 'score_points' && (
+                      <Button
+                        loading={switchingSource}
+                        disabled={locked || catalogPreviews?.score_points?.available === false}
+                        title={
+                          catalogPreviews?.score_points?.available === false
+                            ? (catalogPreviews?.score_points?.hint || '请先确认评分项')
+                            : undefined
+                        }
+                        onClick={handleGenerateFromScorePoints}
+                      >
+                        按评分点重新填入
+                      </Button>
+                    )}
+                    {catalogSource === 'reference_format' && (
+                      <Button
+                        loading={switchingSource}
+                        disabled={locked || catalogPreviews?.reference_format?.available === false}
+                        title={
+                          catalogPreviews?.reference_format?.available === false
+                            ? (catalogPreviews?.reference_format?.hint || '本标书暂无参考格式，请回核对页补充或手动粘贴')
+                            : undefined
+                        }
+                        onClick={handleApplyReferenceFormat}
+                      >
+                        应用本标书参考格式
+                      </Button>
+                    )}
+                    {step1Done && (
+                      <Text type="success" style={{ fontSize: 12 }}>已识别 {catalogCount} 个章节</Text>
+                    )}
+                  </div>
+                </div>
               </div>
-              {validation && !validation.passed && (
-                <Alert
-                  type="warning"
-                  showIcon
-                  message={validation.message || '刚性风险评分项未完全绑定'}
-                  description={(
-                    <div>
-                      {(validation.uncovered_risk_items || []).slice(0, 8).map((item) => (
-                        <div key={item.id}>· {item.title}</div>
-                      ))}
-                      <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 6 }}>
-                        可在下方为章节绑定评分项后再锁定。
+            )}
+
+            {wizardStep === 2 && (
+              <div className="outline-stage outline-review-stage">
+                <div className="outline-review-toolbar">
+                  <div className="outline-review-toolbar-main">
+                    <Text type="secondary" style={{ fontSize: 12 }}>生成档位</Text>
+                    <DisplayModeSwitch
+                      value={generationMode}
+                      disabled={locked}
+                      loading={switchingMode}
+                      onChange={handleGenerationModeChange}
+                    />
+                    <Button
+                      type="primary"
+                      loading={generating}
+                      disabled={!step1Done || locked}
+                      onClick={handleGenerate}
+                    >
+                      {step2Done ? '重新 AI 深化' : 'AI 深化大纲'}
+                    </Button>
+                    {step2Done && (
+                      <Button
+                        size="small"
+                        loading={validating}
+                        disabled={outlineNodes.length === 0}
+                        onClick={() => handleValidate()}
+                      >
+                        检查绑定
+                      </Button>
+                    )}
+                    <Button
+                      size="small"
+                      loading={splittingLong}
+                      disabled={!step2Done || locked || splitPreviewCount === 0}
+                      onClick={() => handleSplitLongLeaves()}
+                    >
+                      拆分长章节{splitPreviewCount > 0 ? ` (${splitPreviewCount})` : ''}
+                    </Button>
+                    <Button size="small" disabled={!step1Done} onClick={() => setPromptOpen(true)}>
+                      查看提示词
+                    </Button>
+                  </div>
+                  <div className="outline-review-toolbar-meta">
+                    {step2Done ? (
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        {outlineNodes.length} 节点 · {leafCount} 叶子 · {guidanceCount} 含写作指导
+                      </Text>
+                    ) : (
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        {!step1Done ? '请先完成定目录' : '深化后将在此审阅章节树并调整绑定'}
+                      </Text>
+                    )}
+                    {step2Done && !generating && (
+                      <Button type="default" onClick={() => goWizardStep(3)}>
+                        下一步：确认锁定
+                      </Button>
+                    )}
+                  </div>
+                </div>
+
+                <details className="outline-facts-details">
+                  <summary>
+                    <span>全局写作约束（可选）</span>
+                    <Text type="secondary">统一全文中的人名、品牌、数字和术语</Text>
+                  </summary>
+                  <div className="outline-facts-details-body">
+                    <GlobalFactsPanel projectId={projectId} title="约束分组" />
+                  </div>
+                </details>
+
+                {generating && (
+                  <Alert
+                    type="info"
+                    showIcon
+                    message="正在调用 AI 深化大纲…"
+                    description="系统正在生成骨架并逐支展开章节，通常需要 1～3 分钟，请勿关闭页面。"
+                  />
+                )}
+                {outlineWarnings.length > 0 && (
+                  <Alert
+                    type="warning"
+                    showIcon
+                    message={`${outlineWarnings.length} 条大纲质量提示`}
+                    description={(
+                      <div>
+                        {outlineWarnings.map((w, i) => (
+                          <div key={i}>• {w}</div>
+                        ))}
+                      </div>
+                    )}
+                  />
+                )}
+                {validation && !validation.passed && (
+                  <Alert
+                    type="warning"
+                    showIcon
+                    message={validation.message || '刚性风险评分项未完全绑定'}
+                    description={(
+                      <div>
+                        {(validation.uncovered_risk_items || []).slice(0, 8).map((item) => (
+                          <div key={item.id}>· {item.title}</div>
+                        ))}
+                      </div>
+                    )}
+                  />
+                )}
+                {validation && validation.passed && (
+                  <Alert
+                    type="success"
+                    showIcon
+                    message="绑定检查通过，可以锁定"
+                    description={
+                      validation.has_advisory_gaps
+                        ? '刚性项已覆盖；仍有建议性未绑定项，可在生成后通过「响应矩阵」查看。'
+                        : '评分项覆盖良好。'
+                    }
+                  />
+                )}
+
+                <div className="outline-review-main">
+                  {step2Done ? (
+                    <OutlineTreeEditor
+                      projectId={projectId}
+                      nodes={outlineNodes}
+                      generating={generating}
+                      saving={saving}
+                      splittingLong={splittingLong}
+                      longLeafThreshold={LONG_LEAF_SPLIT_THRESHOLD}
+                      selectedNodeId={selectedNodeId}
+                      checkedKeys={checkedKeys}
+                      requirements={requirements}
+                      folders={folders}
+                      orderedLeaves={orderedLeaves}
+                      selectedNode={selectedNode}
+                      selectedLeaf={selectedLeaf}
+                      knowledge={knowledge}
+                      onSelect={handleNodeSelect}
+                      onCheck={setCheckedKeys}
+                      onUpdateNode={updateNode}
+                      onAddRoot={handleAddRoot}
+                      onAddChild={handleAddChild}
+                      onAddSibling={handleAddSibling}
+                      onDeleteNode={handleDeleteNode}
+                      onBatchDelete={handleBatchDelete}
+                      onOpenBatchEdit={() => setBatchEditOpen(true)}
+                      onSave={handleSave}
+                      onSplitLeaf={(leafId) => handleSplitLongLeaves(leafId)}
+                    />
+                  ) : (
+                    <div className="outline-review-empty">
+                      <Text type="secondary">
+                        点击上方「AI 深化大纲」后，将在此左右分栏审阅章节树并编辑写作要点。
                       </Text>
                     </div>
                   )}
-                />
-              )}
-              {validation && validation.passed && (
-                <Alert
-                  type="success"
-                  showIcon
-                  message="绑定检查通过，可以锁定"
-                  description={
-                    validation.has_advisory_gaps
-                      ? '刚性项已覆盖；仍有建议性未绑定项，可在生成后通过「响应矩阵」查看。'
-                      : '评分项覆盖良好。'
-                  }
-                />
-              )}
-              <OutlineTreeEditor
-                projectId={projectId}
-                nodes={outlineNodes}
-                generating={generating}
-                saving={saving}
-                splittingLong={splittingLong}
-                longLeafThreshold={LONG_LEAF_SPLIT_THRESHOLD}
-                selectedNodeId={selectedNodeId}
-                checkedKeys={checkedKeys}
-                requirements={requirements}
-                folders={folders}
-                orderedLeaves={orderedLeaves}
-                selectedNode={selectedNode}
-                selectedLeaf={selectedLeaf}
-                knowledge={knowledge}
-                onSelect={handleNodeSelect}
-                onCheck={setCheckedKeys}
-                onUpdateNode={updateNode}
-                onAddRoot={handleAddRoot}
-                onAddChild={handleAddChild}
-                onAddSibling={handleAddSibling}
-                onDeleteNode={handleDeleteNode}
-                onBatchDelete={handleBatchDelete}
-                onOpenBatchEdit={() => setBatchEditOpen(true)}
-                onSave={handleSave}
-                onSplitLeaf={(leafId) => handleSplitLongLeaves(leafId)}
-              />
-            </>
-          )}
-          {!step2Done && !generating && step1Done && (
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              点击「AI 深化大纲」后，将在此审阅章节树并调整评分项绑定。
-            </Text>
-          )}
-        </Space>
-      </OutlineStepRow>
-      </div>
-
-      {/* ── 阶段 3：确认锁定 ── */}
-      <div id="outline-step-3">
-      <OutlineStepRow
-        num={3}
-        active={wizardStep === 3}
-        done={step3Done}
-        expanded={wizardStep === 3}
-        onToggle={() => goWizardStep(3)}
-        summary={step3Done ? '已锁定，可进入内容生成' : needsStatusSync ? '需重新锁定以同步项目状态' : '确认结构后锁定'}
-        title={step3Done ? '大纲已锁定' : needsStatusSync ? '重新锁定以同步状态' : '确认锁定'}
-        subtitle={
-          needsStatusSync
-            ? '章节虽已标记锁定，但项目仍为 planning。再次锁定后即可进入内容生成。'
-            : '锁定表示章节结构已确认，并解锁「内容生成」步骤。锁定后仍可回本页调整，修改后请保存。刚性绑定等生成配置请在内容生成页调整。'
-        }
-      >
-        {step2Done && wordEstimate.totalWords > 0 && (
-          <Alert
-            type="info"
-            showIcon
-            style={{ marginBottom: 12 }}
-            message={`预计全文约 ${wordEstimate.totalWords.toLocaleString()} 字（约 ${wordEstimate.estimatedPages} 页，目标 ${wordEstimate.targetPages} 页）`}
-            description={(
-              <div style={{ fontSize: 12, lineHeight: 1.8 }}>
-                {wordEstimate.items.slice(0, 8).map((item) => (
-                  <div key={item.id}>
-                    {item.expandDegraded ? '⚠ ' : ''}
-                    {item.title}：{item.words > 0 ? `${item.words.toLocaleString()} 字` : '未绑定评分项'}
-                  </div>
-                ))}
-                {wordEstimate.items.length > 8 && (
-                  <div>… 另有 {wordEstimate.items.length - 8} 个叶子章节</div>
-                )}
-                {wordEstimate.unboundLeaves > 0 && (
-                  <div style={{ marginTop: 4, color: '#ad6800' }}>
-                    {wordEstimate.unboundLeaves} 个章节尚未绑定评分项，暂无字数预估
-                  </div>
-                )}
+                </div>
               </div>
             )}
-          />
-        )}
-        {validation && !validation.passed && !step3Done && (
-          <Alert
-            type="warning"
-            showIcon
-            style={{ marginBottom: 12 }}
-            message="尚有未绑定刚性项，锁定可能失败"
-            description={(
-              <Button type="link" size="small" style={{ padding: 0 }} onClick={() => goWizardStep(2)}>
-                返回深化审核，检查绑定
-              </Button>
+
+            {wizardStep === 3 && (
+              <div className="outline-stage outline-lock-stage">
+                <div className="outline-lock-card">
+                  <div className="outline-stage-title">
+                    {step3Done ? '大纲已锁定' : needsStatusSync ? '重新锁定以同步状态' : '确认锁定'}
+                  </div>
+                  <p className="outline-stage-desc">
+                    {needsStatusSync
+                      ? '章节虽已标记锁定，但项目仍为 planning。再次锁定后即可进入内容生成。'
+                      : step3Done
+                        ? '结构已确认，内容生成已解锁。仍可返回前两步微调后保存。'
+                        : '锁定表示章节结构已确认，并进入内容生成。锁定后仍可回本页调整，修改后请保存。'}
+                  </p>
+
+                  {step2Done && wordEstimate.totalWords > 0 && (
+                    <div className="outline-lock-estimate">
+                      <Text strong>
+                        预计全文约 {wordEstimate.totalWords.toLocaleString()} 字
+                        （约 {wordEstimate.estimatedPages} 页，目标 {wordEstimate.targetPages} 页）
+                      </Text>
+                      <div className="outline-lock-estimate-list">
+                        {wordEstimate.items.slice(0, 8).map((item) => (
+                          <div key={item.id}>
+                            {item.expandDegraded ? '⚠ ' : ''}
+                            {item.title}：{item.words > 0 ? `${item.words.toLocaleString()} 字` : '未绑定评分项'}
+                          </div>
+                        ))}
+                        {wordEstimate.items.length > 8 && (
+                          <div>… 另有 {wordEstimate.items.length - 8} 个叶子章节</div>
+                        )}
+                        {wordEstimate.unboundLeaves > 0 && (
+                          <div className="outline-lock-estimate-warn">
+                            {wordEstimate.unboundLeaves} 个章节尚未绑定评分项，暂无字数预估
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {validation && !validation.passed && !step3Done && (
+                    <Alert
+                      type="warning"
+                      showIcon
+                      style={{ marginBottom: 16 }}
+                      message="尚有未绑定刚性项，锁定可能失败"
+                      description={(
+                        <Button type="link" size="small" style={{ padding: 0 }} onClick={() => goWizardStep(2)}>
+                          返回深化审核，检查绑定
+                        </Button>
+                      )}
+                    />
+                  )}
+
+                  <div className="outline-stage-actions">
+                    {!step2Done && (
+                      <Button onClick={() => goWizardStep(2)}>返回深化审核</Button>
+                    )}
+                    <Button
+                      type="primary"
+                      danger={!step3Done}
+                      disabled={step3Done || outlineNodes.length === 0}
+                      loading={locking}
+                      onClick={handleLock}
+                    >
+                      {step3Done ? '已锁定' : needsStatusSync ? '重新锁定以同步状态' : '锁定并进入内容生成'}
+                    </Button>
+                  </div>
+                </div>
+              </div>
             )}
-          />
-        )}
-        <Space wrap align="center">
-          <Button
-            type="primary"
-            danger={!step3Done}
-            disabled={step3Done || outlineNodes.length === 0}
-            onClick={handleLock}
-          >
-            {step3Done ? '已锁定' : needsStatusSync ? '重新锁定以同步状态' : '锁定并继续'}
-          </Button>
-          {step3Done && (
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              请点击页面底部「下一步：内容生成」
-            </Text>
-          )}
-          {!step3Done && !step2Done && (
-            <Text type="secondary" style={{ fontSize: 12 }}>请先完成 AI 深化</Text>
-          )}
-        </Space>
-      </OutlineStepRow>
-      </div>
-      </>
+          </div>
+        </div>
       )}
 
       <KnowledgeItemsDrawer

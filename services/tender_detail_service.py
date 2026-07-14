@@ -16,6 +16,29 @@ PROTECTABLE_FIELDS = (
     "project_type", "contract_mode", "engineering_domain", "budget_yuan", "target_pages",
 )
 
+NOTICE_KEY_TO_PROTECTABLE_FIELD: dict[str, str] = {
+    "project_name": "name",
+    "voltage_level": "voltage_level",
+    "capacity": "capacity",
+    "location": "location",
+    "duration_text": "duration_days",
+    "project_type": "project_type",
+    "contract_mode": "contract_mode",
+    "bid_domain": "engineering_domain",
+    "budget_yuan": "budget_yuan",
+    "target_pages": "target_pages",
+}
+
+
+def protectable_fields_from_notice_keys(touched_keys: set[str] | list[str]) -> list[str]:
+    """将 notice PATCH 中实际出现的 key 映射为可保护的项目字段。"""
+    fields: list[str] = []
+    for key in touched_keys:
+        field = NOTICE_KEY_TO_PROTECTABLE_FIELD.get(key)
+        if field and field not in fields:
+            fields.append(field)
+    return fields
+
 
 def empty_notice() -> dict[str, Any]:
     return {

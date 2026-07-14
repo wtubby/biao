@@ -37,7 +37,7 @@ from services.generation_config import get_generation_config
 from services.humanizer_service import humanize_content
 from services.prompt_debug_service import capture_generation_prompt_debug
 from services.qa_rules import normalize_ai_spacing, trim_out_of_scope_content
-from services.chapter_review_errors import dump_review_errors
+from services.chapter_review_errors import dump_review_errors, merge_review_errors
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +86,7 @@ def write_and_qa_chapter(
 
         fix_instructions: str | None = None
         content = ""
+        qa_context: dict = {"project": project, "chapter": chapter, "segment_warnings": []}
 
         for attempt in range(MAX_QA_RETRY + 1):
             chapter.prompt_debug = capture_generation_prompt_debug(
@@ -98,7 +99,7 @@ def write_and_qa_chapter(
                 fix_instructions,
                 chat_messages=messages,
                 use_chat=is_key,
-                qa_context={"project": project, "chapter": chapter},
+                qa_context=qa_context,
             )
             other_titles = bundle.get("other_leaf_titles") or []
             if other_titles:
@@ -151,6 +152,12 @@ def write_and_qa_chapter(
             )
             chapter.generated_at = datetime.now(timezone.utc)
             break
+
+        segment_warnings = qa_context.get("segment_warnings") or []
+        if segment_warnings:
+            chapter.review_errors = merge_review_errors(chapter.review_errors, segment_warnings)
+            if chapter.review_status == "green":
+                chapter.review_status = "yellow"
 
         if chapter.review_status in ("green", "yellow") and (chapter.generated_content or "").strip():
             _apply_matrix_issues_to_chapter(db, project, chapter)

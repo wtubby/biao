@@ -1,5 +1,8 @@
 """LLM Schema 与模型分路单元测试。"""
 
+import pytest
+from pydantic import ValidationError
+
 from llm.llm_client import resolve_model
 from llm.schemas import QAResult, WriterOutputSchema
 
@@ -47,6 +50,21 @@ def test_writer_output_schema_coerces_non_list_charts():
         "embedded_charts": "bad",
     })
     assert schema.resolved_charts_raw() == []
+
+
+def test_writer_output_schema_rejects_empty_object():
+    with pytest.raises(ValidationError):
+        WriterOutputSchema.model_validate({})
+
+
+def test_writer_output_schema_rejects_wrong_field_names():
+    with pytest.raises(ValidationError):
+        WriterOutputSchema.model_validate({"markdown": "正文段落"})
+
+
+def test_writer_output_schema_rejects_whitespace_only_markdown():
+    with pytest.raises(ValidationError):
+        WriterOutputSchema.model_validate({"markdown_content": "   \n  "})
 
 
 def test_resolve_model_role_fallback(monkeypatch):

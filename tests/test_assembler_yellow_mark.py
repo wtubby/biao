@@ -16,6 +16,8 @@ def test_assemble_document_marks_yellow_heading():
     )
     chapters = [
         SimpleNamespace(
+            id="ch-1",
+            parent_id=None,
             title="施工组织设计",
             level=1,
             is_leaf=1,
@@ -27,12 +29,22 @@ def test_assemble_document_marks_yellow_heading():
 
     with patch("services.assembler_service._render_cover") as mock_cover, patch(
         "services.assembler_service.append_toc_and_body_sections"
-    ), patch("services.assembler_service.HeadingNumbering") as mock_numbering, patch(
-        "services.assembler_service.apply_professional_styles"
+    ), patch(
+        "services.assembler_service.TypesettingNumbering"
+    ) as mock_numbering_cls, patch(
+        "services.assembler_service.apply_typesetting_styles"
+    ), patch(
+        "services.assembler_service.get_typesetting", return_value={}
+    ), patch(
+        "services.assembler_service.enable_auto_update_fields"
+    ), patch(
+        "services.assembler_service._write_content_in_order"
+    ), patch(
+        "services.assembler_service._append_document_gantt"
     ), patch("services.assembler_service.OUTPUT_DIR", "."):
         doc = MagicMock()
         mock_cover.return_value = doc
-        mock_numbering.return_value.apply = MagicMock()
+        mock_numbering_cls.return_value.apply = MagicMock()
 
         assemble_document(project, chapters, mark_yellow=True)
 

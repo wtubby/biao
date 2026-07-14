@@ -22,10 +22,10 @@ def test_format_chart_placeholder_compact_json():
 
 
 def test_assemble_replaces_chart_markers():
-    charts = [
-        {"type": "GANTT_DATA", "data": [{"工序": "A", "开始第几天": 1, "持续天数": 5}]},
-        {"type": "FLOW_DATA", "data": [{"from": "开始", "to": "结束"}]},
-    ]
+    charts = {
+        0: {"type": "GANTT_DATA", "data": [{"工序": "A", "开始第几天": 1, "持续天数": 5}]},
+        1: {"type": "FLOW_DATA", "data": [{"from": "开始", "to": "结束"}]},
+    }
     md = "进度安排如下：\n\n[[CHART:0]]\n\n工艺流程：\n\n[[CHART:1]]"
     out = assemble_chapter_content(md, charts)
     assert "[[CHART:0]]" not in out
@@ -34,7 +34,7 @@ def test_assemble_replaces_chart_markers():
 
 
 def test_assemble_appends_orphan_charts_at_end():
-    charts = [{"type": "GANTT_DATA", "data": [{"工序": "X", "开始第几天": 1, "持续天数": 3}]}]
+    charts = {0: {"type": "GANTT_DATA", "data": [{"工序": "X", "开始第几天": 1, "持续天数": 3}]}}
     out = assemble_chapter_content("正文段落。", charts)
     assert out.startswith("正文段落。")
     assert "[GANTT_DATA:" in out
@@ -62,4 +62,27 @@ def test_parse_writer_output_skips_invalid_charts():
         ],
     })
     assert md == "正文"
-    assert len(charts) == 1
+    assert charts == {
+        0: {
+            "type": "GANTT_DATA",
+            "data": [{"工序": "A", "开始第几天": 1, "持续天数": 1}],
+            "marker": "0",
+        },
+    }
+
+
+def test_assemble_preserves_chart_indices_after_middle_chart_filtered():
+    raw = {
+        "markdown_content": "图一：[[CHART:0]]\n\n图三：[[CHART:2]]",
+        "embedded_charts": [
+            {"type": "GANTT_DATA", "data": [{"工序": "A", "开始第几天": 1, "持续天数": 1}]},
+            {"type": "INVALID", "data": []},
+            {"type": "FLOW_DATA", "data": [{"from": "开始", "to": "结束"}]},
+        ],
+    }
+    out = structured_output_to_content(raw)
+    assert "[[CHART:0]]" not in out
+    assert "[[CHART:2]]" not in out
+    assert "[GANTT_DATA:" in out
+    assert "[FLOW_DATA:" in out
+    assert out.index("[GANTT_DATA:") < out.index("[FLOW_DATA:")

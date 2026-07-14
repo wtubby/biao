@@ -1,12 +1,15 @@
 """自定义排版参数。"""
 
 from docx import Document
+from docx.oxml.ns import qn
 
 from db.models import Project
 from services.generation_config import update_generation_config
 from services.typesetting_config import (
     DEFAULT_TYPESETTING,
     TypesettingNumbering,
+    _register_custom_numbering,
+    _resolve_lvl_text,
     apply_typesetting_styles,
     default_typesetting,
     get_typesetting,
@@ -37,6 +40,43 @@ def test_get_typesetting_from_project():
     ts = get_typesetting(project)
     assert ts["h1"]["align"] == "right"
     assert ts["h2"]["number_format"] == DEFAULT_TYPESETTING["h2"]["number_format"]
+
+
+def test_resolve_lvl_text_single_level_uses_current_ilvl():
+    assert _resolve_lvl_text("{n}、", 0) == "%1、"
+    assert _resolve_lvl_text("（{n}）、", 1) == "（%2）、"
+    assert _resolve_lvl_text("{n}、", 2) == "%3、"
+
+
+def test_resolve_lvl_text_multi_level_shifts_with_ilvl():
+    assert _resolve_lvl_text(2, 1) == "%1.%2"
+    assert _resolve_lvl_text(2, 3) == "%3.%4"
+    assert _resolve_lvl_text(3, 2) == "%1.%2.%3"
+    assert _resolve_lvl_text(4, 4) == "%2.%3.%4.%5"
+
+
+def test_register_custom_numbering_lvl_text_matches_ilvl():
+    doc = Document()
+    ts = default_typesetting()
+    # 故意把 h1 设为原先写死 %2 的格式，验证现在绑定到 ilvl0
+    ts["h1"]["number_format"] = "cn_paren_dun"
+    ts["h3"]["number_format"] = "cn_dun"
+    _register_custom_numbering(doc, ts)
+
+    numbering_elm = doc.part.numbering_part.element
+    abstract_nums = numbering_elm.findall(qn("w:abstractNum"))
+    abstract_num = abstract_nums[-1]
+
+    lvl_texts: dict[int, str] = {}
+    for lvl in abstract_num.findall(qn("w:lvl")):
+        ilvl = int(lvl.get(qn("w:ilvl")))
+        lvl_text_el = lvl.find(qn("w:lvlText"))
+        lvl_texts[ilvl] = lvl_text_el.get(qn("w:val")) if lvl_text_el is not None else ""
+
+    assert lvl_texts[0] == "（%1）、"
+    assert lvl_texts[1] == "（%2）、"
+    assert lvl_texts[2] == "%3、"
+    assert lvl_texts[3] == "%3.%4"
 
 
 def test_typesetting_numbering_registers_num_pr():

@@ -5,6 +5,7 @@ from services.tender_detail_service import (
     get_tender_detail,
     mark_fields_manually_confirmed,
     merge_tender_detail,
+    protectable_fields_from_notice_keys,
     save_tender_detail_from_extraction,
     set_tender_detail,
     _normalize_qualification_items,
@@ -22,6 +23,14 @@ def test_parse_duration_days_from_text():
     assert _parse_duration_days("工期为180日历日") == 180
     assert _parse_duration_days("自合同签订之日起180个日历日内完工") == 180
     assert _parse_duration_days("") is None
+
+
+def test_protectable_fields_from_notice_keys_only_maps_touched():
+    assert protectable_fields_from_notice_keys(["blind_bid"]) == []
+    assert protectable_fields_from_notice_keys(["blind_bid", "voltage_level"]) == ["voltage_level"]
+    assert set(protectable_fields_from_notice_keys([
+        "project_name", "duration_text", "bid_domain", "blind_bid", "tenderer",
+    ])) == {"name", "duration_days", "engineering_domain"}
 
 
 def test_apply_notice_to_project_parses_calendar_ri_duration():

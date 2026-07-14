@@ -8,9 +8,37 @@ import { apiFetch } from '../../api/client.js';
 import { fetchTenderDetail, updateTenderDetail } from '../../api/tenderDetail.js';
 import { fetchDomains } from '../../api/domains.js';
 import { PROJECT_TYPES, ENGINEERING_DOMAINS, CONTRACT_MODES } from '../../constants/project.js';
+import { OutlineStepNav } from '../outline/components.jsx';
 import { ContradictionsAlert } from './ContradictionsAlert.jsx';
 import { RequirementsTable } from './RequirementsTable.jsx';
 import { fetchParseSummary } from '../../api/parse.js';
+
+const CONFIRM_WIZARD_STEPS = [
+  {
+    num: 1,
+    shortTitle: '工程信息',
+    title: '工程信息',
+    hint: '补全并保存项目名称、类型、工期等必填字段，作为后续写作的门禁条件。',
+  },
+  {
+    num: 2,
+    shortTitle: '资格审查',
+    title: '资格审查与废标项',
+    hint: '逐条对照右侧招标原文，核对资格性/符合性审查与废标条款，可增删改。',
+  },
+  {
+    num: 3,
+    shortTitle: '评分要求',
+    title: '评分要求',
+    hint: '核对商务/技术评分项；技术评分中的刚性风险项须全部确认后方可进入大纲。',
+  },
+  {
+    num: 4,
+    shortTitle: '要求文本',
+    title: '商务与技术要求',
+    hint: '补充商务条款、技术标准与参考格式目录，便于 AI 理解约束（可选细化）。',
+  },
+];
 
 const QUALIFICATION_TABS = [
   { key: '资格性审查', label: '资格性审查' },
@@ -53,8 +81,30 @@ function filterQualificationItems(items, tab) {
   return items;
 }
 
+function ConfirmWizardStepHint({ step }) {
+  if (!step?.hint) return null;
+  return (
+    <Alert
+      type="info"
+      showIcon
+      className="confirm-wizard-step-hint"
+      message={step.title}
+      description={step.hint}
+    />
+  );
+}
+
 function TenderDetailPanel({
-  projectId, project, onProjectSaved, onStatsChange, onLocateSource, activeLocateKey,
+  projectId,
+  project,
+  onProjectSaved,
+  onStatsChange,
+  onLocateSource,
+  activeLocateKey,
+  wizardStep = 1,
+  onWizardStepChange,
+  globalsFilled = false,
+  stats = { total: 0, confirmed: 0, risk: 0, riskConfirmed: 0 },
 }) {
   const [loading, setLoading] = useState(true);
   const [savingSection, setSavingSection] = useState('');
@@ -96,6 +146,25 @@ function TenderDetailPanel({
   }, [projectId, noticeForm]);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    const scrollHost = document.querySelector('.confirm-dual-form .ant-card-body');
+    scrollHost?.scrollTo({ top: 0, behavior: 'smooth' });
+  }, [wizardStep]);
+
+  const wizardNavSteps = useMemo(() => CONFIRM_WIZARD_STEPS.map((step) => {
+    let done = false;
+    if (step.num === 1) done = globalsFilled;
+    else if (step.num === 2) done = wizardStep > 2;
+    else if (step.num === 3) {
+      done = stats.risk === 0 ? wizardStep > 3 : stats.risk === stats.riskConfirmed;
+    } else if (step.num === 4) {
+      done = globalsFilled && (stats.risk === 0 || stats.risk === stats.riskConfirmed);
+    }
+    return { ...step, done };
+  }), [globalsFilled, wizardStep, stats]);
+
+  const activeWizardMeta = CONFIRM_WIZARD_STEPS.find((s) => s.num === wizardStep);
 
   const saveNotice = async () => {
     try {
@@ -400,13 +469,20 @@ function TenderDetailPanel({
   }
 
   const packageLabel = detail.notice?.package_name || project?.name || '当前标段';
+  const riskPending = stats.risk > 0 && stats.risk !== stats.riskConfirmed;
 
   return (
-    <div className="tender-detail-panel">
+    <div className="tender-detail-panel confirm-wizard-panel">
+      <OutlineStepNav
+        steps={wizardNavSteps}
+        current={wizardStep}
+        onSelect={(step) => onWizardStepChange?.(step)}
+      />
+
       {parseSummary?.parse_error && (
         <Alert type="warning" showIcon message="解析提示" description={parseSummary.parse_error} style={{ marginBottom: 16 }} />
       )}
-      {parseSummary?.blind_bid_auto_detected && (
+      {parseSummary?.blind_bid_auto_detected && wizardStep === 1 && (
         <Alert
           type="warning"
           showIcon
@@ -417,7 +493,18 @@ function TenderDetailPanel({
       )}
       <ContradictionsAlert projectId={projectId} />
 
-      <div className="tender-detail-block">
+      {wizardStep === 1 && (
+      <div className="tender-detail-block confirm-wizard-step">
+        <ConfirmWizardStepHint step={activeWizardMeta} />
+        {!globalsFilled && (
+          <Alert
+            type="warning"
+            showIcon
+            className="confirm-wizard-gate-alert"
+            message="工程信息尚未完整"
+            description="请填写并保存下方必填项（项目名称、领域、地点、工期、项目类型等），保存后底部「下一步」才可继续。"
+          />
+        )}
         <SectionTitle>投标人须知</SectionTitle>
         <Form form={noticeForm} layout="vertical" className="tender-notice-form">
           <Row gutter={16}>
@@ -560,65 +647,11 @@ function TenderDetailPanel({
           </Button>
         </Form>
       </div>
+      )}
 
-      <div className="tender-detail-block">
-        <SectionTitle>商务要求</SectionTitle>
-        <Input.TextArea
-          className="tender-rich-text"
-          rows={16}
-          value={detail.commerce_requirements}
-          onChange={(e) => setDetail((d) => ({ ...d, commerce_requirements: e.target.value }))}
-          placeholder="商务条款整理内容..."
-        />
-        <EditTip />
-        <Button
-          style={{ marginTop: 12 }}
-          onClick={() => saveTextSection('commerce_requirements')}
-          loading={savingSection === 'commerce_requirements'}
-        >
-          保存商务要求
-        </Button>
-      </div>
-
-      <div className="tender-detail-block">
-        <SectionTitle>技术要求</SectionTitle>
-        <Input.TextArea
-          className="tender-rich-text"
-          rows={16}
-          value={detail.service_requirements}
-          onChange={(e) => setDetail((d) => ({ ...d, service_requirements: e.target.value }))}
-          placeholder="技术标准与服务需求整理内容..."
-        />
-        <EditTip />
-        <Button
-          style={{ marginTop: 12 }}
-          onClick={() => saveTextSection('service_requirements')}
-          loading={savingSection === 'service_requirements'}
-        >
-          保存技术要求
-        </Button>
-      </div>
-
-      <div className="tender-detail-block">
-        <SectionTitle>投标文件参考格式（技术部分目录）</SectionTitle>
-        <Input.TextArea
-          className="tender-rich-text"
-          rows={10}
-          value={detail.bid_reference_catalog || ''}
-          onChange={(e) => setDetail((d) => ({ ...d, bid_reference_catalog: e.target.value }))}
-          placeholder={'从招标文件「投标文件格式 / 技术文件组成」摘录目录，例如：\n（一）工程概况\n（二）施工组织设计\n  1. 施工部署'}
-        />
-        <EditTip />
-        <Button
-          style={{ marginTop: 12 }}
-          onClick={() => saveTextSection('bid_reference_catalog')}
-          loading={savingSection === 'bid_reference_catalog'}
-        >
-          保存参考格式目录
-        </Button>
-      </div>
-
-      <div className="tender-detail-block">
+      {wizardStep === 2 && (
+      <div className="tender-detail-block confirm-wizard-step">
+        <ConfirmWizardStepHint step={activeWizardMeta} />
         <SectionTitle>资格审查</SectionTitle>
         <Tabs
           activeKey={qualTab}
@@ -675,8 +708,20 @@ function TenderDetailPanel({
           </Button>
         </Space>
       </div>
+      )}
 
-      <div className="tender-detail-block">
+      {wizardStep === 3 && (
+      <div className="tender-detail-block confirm-wizard-step">
+        <ConfirmWizardStepHint step={activeWizardMeta} />
+        {riskPending && (
+          <Alert
+            type="warning"
+            showIcon
+            className="confirm-wizard-gate-alert"
+            message={`还有 ${stats.risk - stats.riskConfirmed} 个刚性风险项未确认`}
+            description="请在下方技术评分表格中逐一点击「确认」；全部确认后底部「下一步」才可继续。"
+          />
+        )}
         <SectionTitle>评分要求</SectionTitle>
         <Tabs
           activeKey={scoreTab}
@@ -729,6 +774,69 @@ function TenderDetailPanel({
           </>
         )}
       </div>
+      )}
+
+      {wizardStep === 4 && (
+      <>
+        <div className="tender-detail-block confirm-wizard-step">
+          <ConfirmWizardStepHint step={activeWizardMeta} />
+          <SectionTitle>商务要求</SectionTitle>
+          <Input.TextArea
+            className="tender-rich-text"
+            rows={16}
+            value={detail.commerce_requirements}
+            onChange={(e) => setDetail((d) => ({ ...d, commerce_requirements: e.target.value }))}
+            placeholder="商务条款整理内容..."
+          />
+          <EditTip />
+          <Button
+            style={{ marginTop: 12 }}
+            onClick={() => saveTextSection('commerce_requirements')}
+            loading={savingSection === 'commerce_requirements'}
+          >
+            保存商务要求
+          </Button>
+        </div>
+
+        <div className="tender-detail-block confirm-wizard-step">
+          <SectionTitle>技术要求</SectionTitle>
+          <Input.TextArea
+            className="tender-rich-text"
+            rows={16}
+            value={detail.service_requirements}
+            onChange={(e) => setDetail((d) => ({ ...d, service_requirements: e.target.value }))}
+            placeholder="技术标准与服务需求整理内容..."
+          />
+          <EditTip />
+          <Button
+            style={{ marginTop: 12 }}
+            onClick={() => saveTextSection('service_requirements')}
+            loading={savingSection === 'service_requirements'}
+          >
+            保存技术要求
+          </Button>
+        </div>
+
+        <div className="tender-detail-block confirm-wizard-step">
+          <SectionTitle>投标文件参考格式（技术部分目录）</SectionTitle>
+          <Input.TextArea
+            className="tender-rich-text"
+            rows={10}
+            value={detail.bid_reference_catalog || ''}
+            onChange={(e) => setDetail((d) => ({ ...d, bid_reference_catalog: e.target.value }))}
+            placeholder={'从招标文件「投标文件格式 / 技术文件组成」摘录目录，例如：\n（一）工程概况\n（二）施工组织设计\n  1. 施工部署'}
+          />
+          <EditTip />
+          <Button
+            style={{ marginTop: 12 }}
+            onClick={() => saveTextSection('bid_reference_catalog')}
+            loading={savingSection === 'bid_reference_catalog'}
+          >
+            保存参考格式目录
+          </Button>
+        </div>
+      </>
+      )}
     </div>
   );
 }

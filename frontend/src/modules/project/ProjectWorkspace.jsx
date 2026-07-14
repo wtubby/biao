@@ -10,7 +10,14 @@ import {
   confirmAllRequirements,
   computeRequirementStats,
 } from '../../api/requirements.js';
-import { WORKFLOW_STEPS, STEP_ORDER, getNextAccessibleStep } from '../../constants/workflow.js';
+import {
+  WORKFLOW_STEPS,
+  STEP_ORDER,
+  getNextAccessibleStep,
+  getPageByProjectStatus,
+  isWorkflowStepDone,
+} from '../../constants/workflow.js';
+import { isWorkflowStepKey } from '../../lib/hashRoute.js';
 import { MacroWorkflowBar } from '../../components/MacroWorkflowBar.jsx';
 import { getMacroWorkflowState } from '../../constants/macroWorkflow.js';
 import { PROJECT_STATUS_LABELS } from '../../constants/project.js';
@@ -21,7 +28,6 @@ import {
 import { PageSuspense } from '../../components/PageSuspense.jsx';
 import {
   TenderDetailPanel,
-  GlobalFactsPanel,
   OutlineEditor,
   GenerationPanel,
   PreviewExport,
@@ -30,9 +36,17 @@ import {
 import { UploadConfigPanel } from '../parse/UploadConfigPanel.jsx';
 import { UploadStepPanel } from '../parse/UploadStepPanel.jsx';
 
-function ProjectWorkspace({ project: initialProject, onBack, onOpenSettings }) {
+function ProjectWorkspace({
+  project: initialProject,
+  routePage = null,
+  onPageChange,
+  onBack,
+  onOpenSettings,
+}) {
   const [project, setProject] = useState(initialProject);
-  const [currentPage, setCurrentPage] = useState('upload');
+  const [currentPage, setCurrentPage] = useState(() => (
+    isWorkflowStepKey(routePage) ? routePage : getPageByProjectStatus(initialProject.status)
+  ));
   const [uploading, setUploading] = useState(false);
   const [loadingProject, setLoadingProject] = useState(true);
   const [stats, setStats] = useState({ total: 0, confirmed: 0, risk: 0, riskConfirmed: 0 });
@@ -41,13 +55,21 @@ function ProjectWorkspace({ project: initialProject, onBack, onOpenSettings }) {
   const [outlineLocked, setOutlineLocked] = useState(false);
   const [hasGeneratedChapter, setHasGeneratedChapter] = useState(false);
   const [sourceHighlight, setSourceHighlight] = useState(null);
+  const [confirmWizardStep, setConfirmWizardStep] = useState(1);
   const parseTimedOutRef = useRef(false);
+  const confirmWizardInitRef = useRef(false);
+  const onPageChangeRef = useRef(onPageChange);
+  const routeValidatedRef = useRef(false);
 
   useEffect(() => {
-    if (currentPage !== 'confirm') {
-      setSourceHighlight(null);
-    }
-  }, [currentPage]);
+    onPageChangeRef.current = onPageChange;
+  }, [onPageChange]);
+
+  const goPage = useCallback((page, { replace = false } = {}) => {
+    if (!isWorkflowStepKey(page)) return;
+    setCurrentPage(page);
+    onPageChangeRef.current?.(page, { replace });
+  }, []);
 
   const globalsFilled = useMemo(() => {
     const needsVoltage = !project.engineering_domain || project.engineering_domain === '电力工程';
@@ -60,7 +82,24 @@ function ProjectWorkspace({ project: initialProject, onBack, onOpenSettings }) {
     );
   }, [project]);
 
-  const syncPageFromProject = useCallback(async (p) => {
+  useEffect(() => {
+    if (currentPage !== 'confirm') {
+      setSourceHighlight(null);
+      confirmWizardInitRef.current = false;
+      return;
+    }
+    if (confirmWizardInitRef.current || loadingProject) return;
+    confirmWizardInitRef.current = true;
+    if (!globalsFilled) {
+      setConfirmWizardStep(1);
+    } else if (stats.risk > 0 && stats.risk !== stats.riskConfirmed) {
+      setConfirmWizardStep(3);
+    } else {
+      setConfirmWizardStep(2);
+    }
+  }, [currentPage, loadingProject, globalsFilled, stats.risk, stats.riskConfirmed]);
+
+  const loadWorkspaceMeta = useCallback(async (p) => {
     try {
       const reqs = await fetchRequirements(p.id);
       setStats(computeRequirementStats(reqs));
@@ -74,47 +113,40 @@ function ProjectWorkspace({ project: initialProject, onBack, onOpenSettings }) {
         (n) => n.is_leaf === 1 && n.generated_content && n.review_status !== 'generating',
       ));
     } catch (_) { /* ignore */ }
-
-    if (p.status === 'parsing') {
-      setCurrentPage('upload');
-    } else if (p.status === 'draft') {
-      setCurrentPage('upload');
-    } else if (p.status === 'confirming') {
-      setCurrentPage('confirm');
-    } else if (p.status === 'planning') {
-      setCurrentPage('outline');
-    } else if (p.status === 'outline_locked' || p.status === 'generating') {
-      setCurrentPage('generate');
-    } else if (p.status === 'done') {
-      setCurrentPage('preview');
-    }
-    return p;
   }, []);
 
   const pollProject = useCallback(async () => {
     try {
       const p = await apiFetch(`/projects/${initialProject.id}`);
       setProject(p);
-      await syncPageFromProject(p);
+      await loadWorkspaceMeta(p);
+      if (p.status !== 'parsing') {
+        goPage(getPageByProjectStatus(p.status), { replace: true });
+      }
     } catch (_) { /* ignore poll errors */ }
-  }, [initialProject.id, syncPageFromProject]);
+  }, [initialProject.id, loadWorkspaceMeta, goPage]);
 
   useEffect(() => {
     let cancelled = false;
     setLoadingProject(true);
     setUploading(false);
-    setCurrentPage('upload');
+    routeValidatedRef.current = false;
+    const initialPage = isWorkflowStepKey(routePage)
+      ? routePage
+      : getPageByProjectStatus(initialProject.status);
+    setCurrentPage(initialPage);
+    onPageChangeRef.current?.(initialPage, { replace: true });
 
     (async () => {
       try {
         const p = await apiFetch(`/projects/${initialProject.id}`);
         if (cancelled) return;
         setProject(p);
-        await syncPageFromProject(p);
+        await loadWorkspaceMeta(p);
       } catch (_) {
         if (!cancelled) {
           setProject(initialProject);
-          await syncPageFromProject(initialProject);
+          await loadWorkspaceMeta(initialProject);
         }
       } finally {
         if (!cancelled) setLoadingProject(false);
@@ -175,7 +207,7 @@ function ProjectWorkspace({ project: initialProject, onBack, onOpenSettings }) {
       }));
       setParseTimedOut(false);
       parseTimedOutRef.current = false;
-      setCurrentPage('upload');
+      goPage('upload', { replace: true });
     } catch (e) {
       message.error(e.message || '上传失败');
     } finally {
@@ -190,7 +222,7 @@ function ProjectWorkspace({ project: initialProject, onBack, onOpenSettings }) {
       const result = await confirmAllRequirements(project.id);
       message.success('全部确认完成，已进入大纲策划阶段');
       setProject((p) => ({ ...p, status: result.status }));
-      setCurrentPage('outline');
+      goPage('outline');
     } catch (e) {
       message.error(e.message);
     } finally {
@@ -199,10 +231,31 @@ function ProjectWorkspace({ project: initialProject, onBack, onOpenSettings }) {
   };
 
   const canConfirmAll = stats.risk === stats.riskConfirmed && globalsFilled;
+
+  const confirmBlockReason = useMemo(() => {
+    if (currentPage !== 'confirm') return null;
+    if (project.status === 'planning') {
+      return '项目已进入大纲策划阶段，请直接前往「大纲」页面';
+    }
+    const missingGlobals = [];
+    const needsVoltage = !project.engineering_domain || project.engineering_domain === '电力工程';
+    if (!project.name) missingGlobals.push('项目名称');
+    if (!project.project_type) missingGlobals.push('项目类型');
+    if (needsVoltage && !project.voltage_level) missingGlobals.push('电压等级');
+    if (!project.duration_days) missingGlobals.push('工期');
+    if (!project.location) missingGlobals.push('地点');
+    if (missingGlobals.length > 0) {
+      return `请先在「工程信息」表单中补全并保存：${missingGlobals.join('、')}`;
+    }
+    if (stats.risk !== stats.riskConfirmed) {
+      return `还有 ${stats.risk - stats.riskConfirmed} 个刚性风险项未确认，请在评分项表格中逐一点击「确认」`;
+    }
+    return null;
+  }, [currentPage, project, stats]);
+
   const pendingCount = stats.total - stats.confirmed;
   // 评分项可选：解析完成后即可进入确认页维护工程信息
   const canGoConfirm = project.status !== 'parsing' && project.status !== 'draft';
-  const canGoFacts = canGoConfirm;
   // 须先 confirm-all 进入 planning（或更后状态），与后端 ALLOW_OUTLINE_* 对齐
   const outlineReady = ['planning', 'outline_locked', 'generating', 'done'].includes(project.status);
   const canGoOutline = canGoConfirm && stats.risk === stats.riskConfirmed && globalsFilled && outlineReady;
@@ -212,36 +265,95 @@ function ProjectWorkspace({ project: initialProject, onBack, onOpenSettings }) {
   const canGoPreview = canGoGenerate || hasGeneratedChapter;
   const generatingCount = project.status === 'generating' ? 1 : 0;
 
-  const stepAccess = {
-    upload: true,
-    confirm: canGoConfirm,
-    facts: canGoFacts,
-    outline: canGoOutline,
-    generate: canGoGenerate,
-    preview: canGoPreview,
-  };
-
   const stepUnlockHint = {
     confirm: '请先上传并完成招标文件解析',
-    facts: '可选步骤：请先上传并完成招标文件解析；工程核心参数请在确认步骤维护',
     outline: '须在确认步骤保存完整工程信息，并点击「进入大纲策划」（评分项可选）',
     generate: '请先在大纲策划中点击「锁定并继续」，将项目状态推进到可生成（锁定后仍可返回调整）',
     preview: '请先在大纲策划中锁定结构，即可进入预览验章与导出',
   };
 
-  const currentStepIndex = STEP_ORDER.indexOf(currentPage);
-  const baseProgress = getWorkflowProgressByStatus(project.status);
-  const workflowDone = Math.max(baseProgress.done, currentStepIndex);
-  const workflowProgress = {
-    ...baseProgress,
-    done: workflowDone,
-    percent: Math.round((workflowDone / baseProgress.total) * 100),
+  const stepAccess = {
+    upload: true,
+    confirm: canGoConfirm,
+    outline: canGoOutline,
+    generate: canGoGenerate,
+    preview: canGoPreview,
   };
-  const macroWorkflowSteps = getMacroWorkflowState(currentPage, stepAccess);
-  const parseConfigReady = !['draft', 'parsing'].includes(project.status);
+
+  // URL 指定了尚未解锁的步骤时，回落到当前状态对应页
+  useEffect(() => {
+    if (loadingProject || routeValidatedRef.current) return;
+    routeValidatedRef.current = true;
+    if (isWorkflowStepKey(currentPage) && stepAccess[currentPage]) {
+      onPageChangeRef.current?.(currentPage, { replace: true });
+      return;
+    }
+    const fallback = getPageByProjectStatus(project.status);
+    goPage(fallback, { replace: true });
+  }, [loadingProject, currentPage, project.status, canGoConfirm, canGoOutline, canGoGenerate, canGoPreview, goPage]);
+
+  // 浏览器前进/后退：同步路由步
+  useEffect(() => {
+    if (loadingProject || !isWorkflowStepKey(routePage) || routePage === currentPage) return;
+    if (stepAccess[routePage]) {
+      setCurrentPage(routePage);
+      return;
+    }
+    message.info(stepUnlockHint[routePage] || '该步骤尚未解锁');
+    goPage(currentPage, { replace: true });
+  }, [routePage, loadingProject, canGoConfirm, canGoOutline, canGoGenerate, canGoPreview, currentPage, goPage]);
+
+  const currentStepIndex = STEP_ORDER.indexOf(currentPage);
+  const workflowProgress = getWorkflowProgressByStatus(project.status);
+  const macroWorkflowSteps = getMacroWorkflowState(currentPage, stepAccess, project.status);
 
   const goPrev = () => {
-    if (currentStepIndex > 0) setCurrentPage(STEP_ORDER[currentStepIndex - 1]);
+    if (currentPage === 'confirm' && confirmWizardStep > 1) {
+      setConfirmWizardStep((s) => s - 1);
+      return;
+    }
+    if (currentStepIndex > 0) goPage(STEP_ORDER[currentStepIndex - 1]);
+  };
+
+  const confirmWizardNextLabels = {
+    1: '下一步：资格审查',
+    2: '下一步：评分要求',
+    3: '下一步：商务与技术要求',
+    4: '核对无误，进入大纲策划',
+  };
+
+  const confirmWizardExtras = {
+    1: globalsFilled ? '工程信息已完整，可进入资格审查' : '请填写并保存工程信息与投标人须知',
+    2: '请在右侧招标原文中逐条核对资格性与废标条款',
+    3: `已确认 ${stats.confirmed}/${stats.total}，刚性风险项 ${stats.riskConfirmed}/${stats.risk}`,
+    4: '补充商务/技术要求文本后，可进入大纲策划',
+  };
+
+  const confirmNextDisabled = useMemo(() => {
+    if (currentPage !== 'confirm') return false;
+    if (project.status === 'planning') return true;
+    if (confirmWizardStep === 1) return !globalsFilled;
+    if (confirmWizardStep === 3) return stats.risk > 0 && stats.risk !== stats.riskConfirmed;
+    if (confirmWizardStep === 4) return !canConfirmAll;
+    return false;
+  }, [currentPage, confirmWizardStep, globalsFilled, stats, canConfirmAll, project.status]);
+
+  const confirmNextDisabledReason = useMemo(() => {
+    if (currentPage !== 'confirm' || !confirmNextDisabled) return null;
+    if (confirmWizardStep === 1) return confirmBlockReason;
+    if (confirmWizardStep === 3 && stats.risk > 0 && stats.risk !== stats.riskConfirmed) {
+      return `还有 ${stats.risk - stats.riskConfirmed} 个刚性风险项未确认，请在技术评分表格中逐一点击「确认」`;
+    }
+    if (confirmWizardStep === 4) return confirmBlockReason;
+    return null;
+  }, [currentPage, confirmNextDisabled, confirmWizardStep, confirmBlockReason, stats]);
+
+  const goConfirmWizardNext = () => {
+    if (confirmWizardStep < 4) {
+      setConfirmWizardStep((s) => s + 1);
+      return;
+    }
+    handleConfirmAll();
   };
 
   const nextStepKey = getNextAccessibleStep(currentPage, stepAccess);
@@ -250,7 +362,7 @@ function ProjectWorkspace({ project: initialProject, onBack, onOpenSettings }) {
   const goNext = () => {
     if (currentPage === 'confirm') return;
     if (nextStepKey) {
-      setCurrentPage(nextStepKey);
+      goPage(nextStepKey);
       return;
     }
     if (currentStepIndex < STEP_ORDER.length - 1) {
@@ -278,9 +390,8 @@ function ProjectWorkspace({ project: initialProject, onBack, onOpenSettings }) {
             },
             { type: 'divider', className: 'workspace-menu-divider' },
             ...WORKFLOW_STEPS.map((step) => {
-              const stepIndex = STEP_ORDER.indexOf(step.key);
               const disabled = !stepAccess[step.key];
-              const isDone = stepIndex < currentStepIndex;
+              const isDone = !step.optional && isWorkflowStepDone(project.status, step.key);
               const label = (
                 <span className={`workspace-menu-label${isDone ? ' is-done' : ''}${step.optional ? ' is-optional' : ''}`}>
                   <Icon name={step.icon} size={15} />
@@ -309,7 +420,7 @@ function ProjectWorkspace({ project: initialProject, onBack, onOpenSettings }) {
                     ? <Tooltip title={step.description} placement="right">{label}</Tooltip>
                     : label,
                 disabled,
-                onClick: () => { if (!disabled) setCurrentPage(step.key); },
+                onClick: () => { if (!disabled) goPage(step.key); },
               };
             }),
           ]}
@@ -328,10 +439,10 @@ function ProjectWorkspace({ project: initialProject, onBack, onOpenSettings }) {
         <PageSuspense>
         <div className="workspace-main-content">
       {currentPage === 'upload' && (
-        <div className="parse-triple-layout">
+        <div className="upload-dual-layout">
           <Card
             title="招标原文"
-            className="section-card parse-triple-left"
+            className="section-card upload-dual-preview"
             variant="borderless"
             style={{ marginTop: 0 }}
           >
@@ -346,34 +457,35 @@ function ProjectWorkspace({ project: initialProject, onBack, onOpenSettings }) {
             </div>
           </Card>
 
-          <Card
-            title="上传与解析"
-            className="section-card parse-triple-center"
-            variant="borderless"
-            style={{ marginTop: 0 }}
-          >
-            <UploadStepPanel
-              project={project}
-              loadingProject={loadingProject}
-              uploading={uploading}
-              parseTimedOut={parseTimedOut}
-              onUpload={handleUpload}
-            />
-          </Card>
+          <div className="upload-dual-actions">
+            <Card
+              title="上传与解析"
+              className="section-card upload-dual-action-card"
+              variant="borderless"
+              style={{ marginTop: 0 }}
+            >
+              <UploadStepPanel
+                project={project}
+                loadingProject={loadingProject}
+                uploading={uploading}
+                parseTimedOut={parseTimedOut}
+                onUpload={handleUpload}
+              />
+            </Card>
 
-          <Card
-            title="生成配置"
-            className="section-card parse-triple-right"
-            variant="borderless"
-            style={{ marginTop: 0 }}
-          >
-            <UploadConfigPanel
-              projectId={project.id}
-              project={project}
-              parseReady={parseConfigReady}
-              onProjectChange={(patch) => setProject((p) => ({ ...p, ...patch }))}
-            />
-          </Card>
+            <Card
+              title="生成配置"
+              className="section-card upload-dual-action-card"
+              variant="borderless"
+              style={{ marginTop: 0 }}
+            >
+              <UploadConfigPanel
+                projectId={project.id}
+                project={project}
+                onProjectChange={(patch) => setProject((p) => ({ ...p, ...patch }))}
+              />
+            </Card>
+          </div>
         </div>
       )}
 
@@ -395,6 +507,10 @@ function ProjectWorkspace({ project: initialProject, onBack, onOpenSettings }) {
               onStatsChange={setStats}
               onLocateSource={setSourceHighlight}
               activeLocateKey={sourceHighlight?.key}
+              wizardStep={confirmWizardStep}
+              onWizardStepChange={setConfirmWizardStep}
+              globalsFilled={globalsFilled}
+              stats={stats}
             />
           </Card>
           <Card
@@ -415,10 +531,6 @@ function ProjectWorkspace({ project: initialProject, onBack, onOpenSettings }) {
         </div>
       )}
 
-      {currentPage === 'facts' && (
-        <GlobalFactsPanel projectId={project.id} />
-      )}
-
       {currentPage === 'outline' && (
         <OutlineEditor
           projectId={project.id}
@@ -429,6 +541,7 @@ function ProjectWorkspace({ project: initialProject, onBack, onOpenSettings }) {
           onLocked={(result) => {
             setProject((p) => ({ ...p, status: result?.status || 'outline_locked' }));
             setOutlineLocked(true);
+            goPage('generate');
           }}
         />
       )}
@@ -440,18 +553,17 @@ function ProjectWorkspace({ project: initialProject, onBack, onOpenSettings }) {
           durationDays={project.duration_days}
           generationMode={project.generation_mode || 'full'}
           onGenerationModeChange={(mode) => setProject((p) => ({ ...p, generation_mode: mode }))}
-          onGoEditOutline={() => setCurrentPage('outline')}
+          onGoEditOutline={() => goPage('outline')}
           onHasGeneratedChapter={() => setHasGeneratedChapter(true)}
           onStarted={() => setProject((p) => ({ ...p, status: 'generating' }))}
           onDone={({ greenCount = 0, yellowCount = 0 } = {}) => {
             setProject((p) => ({ ...p, status: 'done' }));
-            // 绿章或待优化黄章均可进入预览做验章/改写
             if (greenCount + yellowCount > 0) {
               setHasGeneratedChapter(true);
-              setCurrentPage('preview');
             }
           }}
           onPaused={() => setProject((p) => ({ ...p, status: 'outline_locked' }))}
+          onGoPreview={() => goPage('preview')}
         />
       )}
 
@@ -459,6 +571,7 @@ function ProjectWorkspace({ project: initialProject, onBack, onOpenSettings }) {
         <PreviewExport
           projectId={project.id}
           durationDays={project.duration_days}
+          onGoGenerate={() => goPage('generate')}
         />
       )}
         </div>
@@ -468,33 +581,38 @@ function ProjectWorkspace({ project: initialProject, onBack, onOpenSettings }) {
         <div className="workspace-main-footer">
         <StepFooter
           extra={currentPage === 'confirm'
-            ? `已确认 ${stats.confirmed}/${stats.total}，刚性风险项 ${stats.riskConfirmed}/${stats.risk}`
-            : currentPage === 'facts'
-              ? '可选步骤，可随时跳过'
-              : currentPage === 'outline' && canGoGenerate
-                ? '结构已确认，可进入内容生成'
+            ? confirmWizardExtras[confirmWizardStep] || confirmBlockReason
+            : currentPage === 'outline' && canGoGenerate
+                ? '大纲已锁定，可进入内容生成'
                 : currentPage === 'outline'
-                  ? '完成定目录 → 深化审核 → 锁定后，即可进入内容生成'
+                  ? '在本页完成定目录 → 深化审核 → 锁定'
                   : `步骤 ${currentStepIndex + 1} / ${STEP_ORDER.length}`}
-          onPrev={currentStepIndex > 0 ? goPrev : null}
+          onPrev={currentPage === 'confirm'
+            ? (confirmWizardStep > 1 || currentStepIndex > 0 ? goPrev : null)
+            : (currentStepIndex > 0 ? goPrev : null)}
           onNext={currentPage === 'preview'
             ? null
-            : (currentPage === 'confirm' ? handleConfirmAll : goNext)}
+            : (currentPage === 'confirm' ? goConfirmWizardNext : goNext)}
           nextLabel={
             currentPage === 'confirm'
-              ? '核对无误，进入大纲策划'
-              : currentPage === 'facts'
-                ? '跳过，进入大纲'
-                : currentPage === 'outline' && canGoGenerate
+              ? confirmWizardNextLabels[confirmWizardStep] || '下一步'
+              : currentPage === 'outline' && canGoGenerate
                   ? '下一步：内容生成'
                   : currentPage === 'outline'
-                    ? '请先锁定大纲'
+                    ? '请在上方完成锁定'
                     : '下一步'
           }
           nextDisabled={currentPage === 'confirm'
-            ? (!canConfirmAll || project.status === 'planning')
-            : !nextStepAccessible}
-          nextLoading={currentPage === 'confirm' ? confirming : false}
+            ? confirmNextDisabled
+            : currentPage === 'outline'
+              ? !canGoGenerate
+              : !nextStepAccessible}
+          nextDisabledReason={currentPage === 'confirm'
+            ? confirmNextDisabledReason
+            : currentPage === 'outline' && !canGoGenerate
+              ? '请先在大纲第 3 步点击「锁定并进入内容生成」'
+              : null}
+          nextLoading={currentPage === 'confirm' && confirmWizardStep === 4 ? confirming : false}
         />
         </div>
       </div>

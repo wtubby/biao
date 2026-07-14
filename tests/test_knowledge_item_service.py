@@ -116,6 +116,73 @@ def test_search_knowledge_items_semantic_hit_without_lexical_overlap(monkeypatch
     assert "装置阻值检测" in results[0]
 
 
+def test_search_knowledge_items_skips_semantic_when_use_vector_false(monkeypatch):
+    monkeypatch.setattr(
+        "services.knowledge_item_service.tokenize",
+        lambda text: re.findall(r"[A-Za-z0-9]+|[\u4e00-\u9fff]{2,}", text),
+    )
+    monkeypatch.setattr("services.knowledge_item_service.expand_tokens", lambda tokens: tokens)
+
+    import config as cfg
+
+    ground_vec = _topic_embedder(["装置阻值检测"])[0]
+    other_vec = _topic_embedder(["混凝土浇筑"])[0]
+    items = [
+        SimpleNamespace(
+            title="混凝土浇筑",
+            resume="结构施工",
+            content="模板验收与钢筋绑扎检查。",
+            sort_order=1,
+            source_file="concrete.md",
+            embedding=embedding_service.to_blob(other_vec),
+            embedding_model=cfg.EMBEDDING_MODEL_PATH,
+        ),
+        SimpleNamespace(
+            title="装置阻值检测",
+            resume="回填前测量",
+            content="装置阻值检测应在回填前完成并记录。",
+            sort_order=2,
+            source_file="ground.md",
+            embedding=embedding_service.to_blob(ground_vec),
+            embedding_model=cfg.EMBEDDING_MODEL_PATH,
+        ),
+    ]
+    monkeypatch.setattr(
+        "services.knowledge_item_service.list_items",
+        lambda folder_path, project_id, db: items,
+    )
+
+    semantic_called = {"count": 0}
+    original_semantic = __import__(
+        "services.knowledge_item_service", fromlist=["_semantic_rank_items"]
+    )._semantic_rank_items
+
+    def _track_semantic(*args, **kwargs):
+        semantic_called["count"] += 1
+        return original_semantic(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "services.knowledge_item_service._semantic_rank_items",
+        _track_semantic,
+    )
+
+    embedding_service.set_test_embedder(_topic_embedder)
+    try:
+        with_vector = search_knowledge_items(
+            "接地电阻测试", "接地网", "project-1", object(), top_k=1, use_vector=True,
+        )
+        without_vector = search_knowledge_items(
+            "接地电阻测试", "接地网", "project-1", object(), top_k=1, use_vector=False,
+        )
+    finally:
+        embedding_service.set_test_embedder(None)
+
+    assert semantic_called["count"] == 1
+    assert len(with_vector) == 1
+    assert "装置阻值检测" in with_vector[0]
+    assert without_vector == []
+
+
 def test_search_knowledge_items_bm25_fallback_when_embedding_disabled(monkeypatch):
     monkeypatch.setattr(
         "services.knowledge_item_service.tokenize",

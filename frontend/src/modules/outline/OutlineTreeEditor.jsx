@@ -1,6 +1,6 @@
 import {
   useMemo,
-  Button, Input, Select, Tag, Space, Spin, Popconfirm, Alert, Row, Col, Tree, Tooltip, Option, Text,
+  Button, Input, Select, Tag, Space, Spin, Popconfirm, Alert, Tree, Tooltip, Option, Text,
 } from '../../globals.js';
 
 import { KnowledgeFolderActions } from '../knowledge/KnowledgeFolderActions.jsx';
@@ -76,10 +76,10 @@ function OutlineTreeEditor({
   }
 
   return (
-    <Spin spinning={generating}>
-      <Row gutter={16}>
-        <Col xs={24} md={9}>
-          <Space wrap style={{ marginBottom: 8 }}>
+    <Spin spinning={generating} className="outline-tree-editor">
+      <div className="outline-tree-editor-layout">
+        <div className="outline-tree-editor-left">
+          <Space wrap className="outline-tree-editor-actions">
             <Button size="small" onClick={onAddRoot}>添加一级章节</Button>
             <Button size="small" onClick={onAddChild} disabled={!selectedNodeId}>添加子节</Button>
             <Button size="small" onClick={onAddSibling} disabled={!selectedNodeId}>添加同级</Button>
@@ -112,8 +112,8 @@ function OutlineTreeEditor({
               onSelect={onSelect}
             />
           </div>
-        </Col>
-        <Col xs={24} md={15}>
+        </div>
+        <div className="outline-tree-editor-right">
           <div className="outline-leaf-detail">
             {!selectedNode ? (
               <div className="outline-leaf-detail-empty">
@@ -239,11 +239,11 @@ function OutlineTreeEditor({
               </div>
             )}
           </div>
-        </Col>
-      </Row>
-      <Button onClick={onSave} loading={saving} style={{ marginTop: 12 }}>
-        保存大纲
-      </Button>
+          <Button onClick={onSave} loading={saving} className="outline-tree-editor-save">
+            保存大纲
+          </Button>
+        </div>
+      </div>
     </Spin>
   );
 }
