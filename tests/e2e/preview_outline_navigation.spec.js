@@ -23,6 +23,13 @@ test.describe('预览页与大纲页之间前进后退', () => {
     await page.goto(`/#/projects/${projectId}/outline`);
     await expect(page.locator('.workspace-menu-label', { hasText: '大纲编辑' })).toBeVisible({ timeout: 10_000 });
 
+    // 大纲已锁定时默认停在"锁定"这一步的摘要视图，不直接显示章节树；
+    // 要看到具体章节标题，需要点步骤导航条上的"深化审核"切回去
+    // （注意：不能用"返回深化审核，检查绑定"那个按钮——那个只在
+    // 校验未通过且尚未锁定时才会渲染，已锁定场景下条件恒为假）
+    await expect(page.getByText('大纲已锁定', { exact: true })).toBeVisible({ timeout: 10_000 });
+    await page.getByRole('button', { name: '深化审核' }).click();
+
     // 大纲页应显示同一章节，且锁定标记正确（种子数据里根节点 is_locked=1）
     await expect(page.getByText('施工总体部署').first()).toBeVisible({ timeout: 10_000 });
     await expect(page.getByText('已锁定').first()).toBeVisible({ timeout: 10_000 });
@@ -35,9 +42,11 @@ test.describe('预览页与大纲页之间前进后退', () => {
     // 后退回来之后，章节标题应该还在、没有变成空列表或者报错
     await expect(page.getByText('施工总体部署').first()).toBeVisible({ timeout: 10_000 });
 
-    // 再前进回大纲页，验证前进也不会丢数据
+    // 再前进回大纲页，验证前进也不会丢数据（同样需要先切回深化审核才能看到树）
     await page.goForward();
     await expect(page).toHaveURL(new RegExp(`#/projects/${projectId}/outline$`));
+    await expect(page.getByText('大纲已锁定', { exact: true })).toBeVisible({ timeout: 10_000 });
+    await page.getByRole('button', { name: '深化审核' }).click();
     await expect(page.getByText('施工总体部署').first()).toBeVisible({ timeout: 10_000 });
   });
 

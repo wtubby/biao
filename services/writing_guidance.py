@@ -121,12 +121,51 @@ def _match_overview(t: str) -> bool:
     return False
 
 
+# 章节写作风格档位（与项目级精简/满血正交）
+STYLE_TIER_RIGOROUS = "rigorous"
+STYLE_TIER_BALANCED = "balanced"
+STYLE_TIER_INNOVATIVE = "innovative"
+STYLE_TIERS = (STYLE_TIER_RIGOROUS, STYLE_TIER_BALANCED, STYLE_TIER_INNOVATIVE)
+STYLE_TIER_LABELS = {
+    STYLE_TIER_RIGOROUS: "严谨",
+    STYLE_TIER_BALANCED: "均衡",
+    STYLE_TIER_INNOVATIVE: "创新",
+}
+_STYLE_TIER_HINTS = {
+    STYLE_TIER_RIGOROUS: (
+        "【写作风格：严谨】用语规范、论据充分、引用规程与参数；少用口号，结构清晰、可复核。"
+    ),
+    STYLE_TIER_BALANCED: (
+        "【写作风格：均衡】专业表述与可读性兼顾；要点完整，篇幅适中，避免空泛与过度堆砌。"
+    ),
+    STYLE_TIER_INNOVATIVE: (
+        "【写作风格：创新】在合规前提下突出优化思路、差异化方案与亮点表述，仍须可落地、可响应评分。"
+    ),
+}
+
+
+def normalize_style_tier(value: str | None) -> str:
+    tier = str(value or "").strip().lower()
+    if tier in STYLE_TIERS:
+        return tier
+    return STYLE_TIER_BALANCED
+
+
+def style_tier_label(tier: str | None) -> str:
+    return STYLE_TIER_LABELS.get(normalize_style_tier(tier), STYLE_TIER_LABELS[STYLE_TIER_BALANCED])
+
+
+def style_tier_hint(tier: str | None) -> str:
+    return _STYLE_TIER_HINTS[normalize_style_tier(tier)]
+
+
 def _empty_guidance() -> dict[str, Any]:
     return {
         "brief": "",
         "content_boundary": "",
         "target_words": None,
         "split_origin": False,
+        "style_tier": STYLE_TIER_BALANCED,
     }
 
 
@@ -145,6 +184,7 @@ def parse_writing_guidance(raw: str | None) -> dict[str, Any]:
                 "content_boundary": str(data.get("content_boundary") or "").strip(),
                 "target_words": _coerce_int(data.get("target_words")),
                 "split_origin": bool(data.get("split_origin")),
+                "style_tier": normalize_style_tier(data.get("style_tier")),
             }
     except json.JSONDecodeError:
         pass
@@ -157,10 +197,12 @@ def serialize_writing_guidance(
     content_boundary: str = "",
     target_words: int | None = None,
     split_origin: bool = False,
+    style_tier: str | None = None,
 ) -> str:
     payload: dict[str, Any] = {
         "brief": (brief or "").strip(),
         "content_boundary": (content_boundary or "").strip(),
+        "style_tier": normalize_style_tier(style_tier),
     }
     if target_words is not None and target_words > 0:
         payload["target_words"] = int(target_words)
@@ -177,6 +219,7 @@ def guidance_to_outline_dict(raw: str | None) -> dict[str, Any]:
         "content_boundary": parsed["content_boundary"],
         "target_words": parsed["target_words"],
         "split_origin": parsed["split_origin"],
+        "style_tier": parsed["style_tier"],
     }
 
 

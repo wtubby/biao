@@ -100,12 +100,14 @@ def sanitize_leaf_content_boundaries(nodes: list[dict]) -> tuple[list[dict], lis
         if target_words is None and parsed:
             target_words = parsed.get("target_words")
         split_origin = bool(parsed.get("split_origin")) if parsed else False
+        style_tier = item.get("style_tier") or (parsed.get("style_tier") if parsed else None)
 
         item["writing_guidance"] = serialize_writing_guidance(
             brief=brief,
             content_boundary=boundary,
             target_words=target_words,
             split_origin=split_origin,
+            style_tier=style_tier,
         )
         result.append(item)
 

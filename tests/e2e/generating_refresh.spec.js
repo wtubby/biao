@@ -17,6 +17,7 @@ test.describe('生成中刷新页面', () => {
   test('刷新后仍显示为"生成中"状态，且不报错、不卡在加载态', async ({ page }) => {
     const { generating_project_id: projectId } = loadFixtures();
 
+    /** @type {string[]} */
     const consoleErrors = [];
     page.on('pageerror', (err) => consoleErrors.push(String(err)));
 

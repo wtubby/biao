@@ -11,7 +11,11 @@ from prompts.bundle_blocks import (
 )
 from prompts.project_context import build_cacheable_project_prefix
 from prompts.context_blocks import format_scope_constraints
-from services.writing_guidance import get_chapter_constraints, is_descriptive_chapter
+from services.writing_guidance import (
+    get_chapter_constraints,
+    is_descriptive_chapter,
+    style_tier_hint,
+)
 
 _WRITER_RULES = """每次只撰写**一个叶子章节**的正文，严格聚焦于当前章节内容，不得穿插、预写或概括其他章节。
 
@@ -179,6 +183,7 @@ def _writer_chapter_task_body(bundle: dict) -> str:
     boundary = guidance.get("content_boundary") or "无"
     target_words = guidance.get("target_words")
     word_hint = f"建议篇幅约 {target_words} 字（允许 ±25%）" if target_words else "篇幅与绑定评分项分值匹配"
+    style_hint = style_tier_hint(guidance.get("style_tier"))
 
     scope_block = format_scope_constraints(bundle, style="writer", limit=_OTHER_LEAF_PROMPT_LIMIT)
 
@@ -199,6 +204,7 @@ def _writer_chapter_task_body(bundle: dict) -> str:
 写作要点：{brief}
 内容边界：{boundary}
 篇幅要求：{word_hint}
+{style_hint}
 
 ## 撰写范围（必须遵守）
 {scope_block}"""

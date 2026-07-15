@@ -83,6 +83,17 @@ export function generateOutline(projectId) {
   return apiFetch(`/projects/${projectId}/outline/generate`, { method: 'POST' });
 }
 
+/** 单章重新生成编写思路（写作要点 + 内容边界） */
+export function regenerateLeafGuidance(projectId, leafId, options = {}) {
+  const body = {};
+  if (options.styleTier) body.style_tier = options.styleTier;
+  return apiFetch(`/projects/${projectId}/outline/leaves/${encodeURIComponent(leafId)}/regenerate-guidance`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
 export function saveOutline(projectId, nodes) {
   return apiFetch(`/projects/${projectId}/outline`, {
     method: 'PUT',

@@ -9,7 +9,9 @@ from db.models import Project, TechOutline, TechRequirement
 from domains.registry import DEFAULT_DOMAIN, resolve_domain
 from llm.llm_client import call_llm_json
 from prompts.outline_prompt import (
+    LEAF_GUIDANCE_SYSTEM_PROMPT,
     build_branch_user_prompt,
+    build_leaf_guidance_user_prompt,
     build_skeleton_user_prompt,
     get_branch_system_prompt,
     get_reference_structure,
@@ -36,6 +38,7 @@ from services.writing_guidance import (
     get_chapter_type,
     guidance_to_outline_dict,
     is_descriptive_chapter,
+    normalize_style_tier,
     parse_writing_guidance,
     serialize_writing_guidance,
 )
@@ -545,6 +548,7 @@ def enrich_outline_nodes(
 
         brief = str(item.get("guidance_brief") or "").strip()
         boundary = str(item.get("content_boundary") or "").strip()
+        style_tier = normalize_style_tier(item.get("style_tier"))
         wg_raw = item.get("writing_guidance")
         split_origin = False
         if isinstance(wg_raw, str) and wg_raw.strip().startswith("{"):
@@ -554,6 +558,8 @@ def enrich_outline_nodes(
                 brief = parsed["brief"]
             if not boundary:
                 boundary = parsed["content_boundary"]
+            if not item.get("style_tier"):
+                style_tier = parsed["style_tier"]
         elif not brief:
             brief = str(wg_raw or "").strip()
 
@@ -562,7 +568,9 @@ def enrich_outline_nodes(
             content_boundary=boundary,
             target_words=target_words,
             split_origin=split_origin,
+            style_tier=style_tier,
         )
+        item["style_tier"] = style_tier
         item.pop("content_boundary", None)
         enriched.append(item)
 
@@ -594,13 +602,15 @@ def save_outline_tree(db: Session, project_id: str, nodes: list[dict]) -> list[T
             wg_raw = node.get("writing_guidance")
             parsed = parse_writing_guidance(wg_raw if isinstance(wg_raw, str) else None)
             boundary = str(node.get("content_boundary") or parsed["content_boundary"] or "").strip()
-            brief = parsed["brief"]
+            brief = str(node.get("guidance_brief") or parsed["brief"] or "").strip()
             target_words = parsed["target_words"]
+            style_tier = normalize_style_tier(node.get("style_tier") or parsed.get("style_tier"))
             writing_guidance = serialize_writing_guidance(
                 brief=brief,
                 content_boundary=boundary,
                 target_words=target_words,
                 split_origin=bool(parsed.get("split_origin")),
+                style_tier=style_tier,
             )
 
         stale = _is_outline_node_stale(old, node, req_ids, writing_guidance)
@@ -833,8 +843,85 @@ def _outline_rows_to_enrich_nodes(rows: list[TechOutline]) -> list[dict]:
             "guidance_brief": parsed["brief"],
             "content_boundary": parsed["content_boundary"],
             "writing_guidance": row.writing_guidance,
+            "style_tier": parsed["style_tier"],
         })
     return nodes
+
+
+def regenerate_leaf_guidance(
+    db: Session,
+    project: Project,
+    leaf_id: str,
+    *,
+    style_tier: str | None = None,
+) -> dict:
+    """为单个叶子节点重新生成写作要点与内容边界，保留绑定与目标字数。"""
+    row = (
+        db.query(TechOutline)
+        .filter(TechOutline.project_id == project.id, TechOutline.id == leaf_id)
+        .first()
+    )
+    if not row:
+        raise ValueError("章节不存在")
+    if int(row.is_leaf or 0) != 1:
+        raise ValueError("仅叶子章节可重新生成编写思路")
+
+    requirements = (
+        db.query(TechRequirement)
+        .filter(TechRequirement.project_id == project.id, TechRequirement.status == "confirmed")
+        .all()
+    )
+    req_dicts = _req_dicts(requirements)
+    parsed = parse_writing_guidance(row.writing_guidance)
+    req_ids = []
+    if row.requirement_ids:
+        try:
+            req_ids = json.loads(row.requirement_ids)
+        except json.JSONDecodeError:
+            pass
+    leaf = {
+        "id": row.id,
+        "title": row.title,
+        "requirement_ids": req_ids,
+        "guidance_brief": parsed["brief"],
+        "content_boundary": parsed["content_boundary"],
+        "style_tier": normalize_style_tier(style_tier or parsed.get("style_tier")),
+    }
+    global_info = _global_engineering_info(project)
+    result = call_llm_json(
+        [
+            {"role": "system", "content": LEAF_GUIDANCE_SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": build_leaf_guidance_user_prompt(
+                    global_info, leaf, req_dicts, style_tier=leaf["style_tier"],
+                ),
+            },
+        ]
+    )
+    if not isinstance(result, dict):
+        raise ValueError("AI 返回格式无效")
+    brief = str(
+        result.get("writing_guidance")
+        or result.get("guidance_brief")
+        or result.get("brief")
+        or ""
+    ).strip()
+    boundary = str(result.get("content_boundary") or "").strip()
+    if not brief and not boundary:
+        raise ValueError("AI 未返回有效的编写思路")
+
+    writing_guidance = serialize_writing_guidance(
+        brief=brief or parsed["brief"],
+        content_boundary=boundary or parsed["content_boundary"],
+        target_words=parsed.get("target_words"),
+        split_origin=bool(parsed.get("split_origin")),
+        style_tier=leaf["style_tier"],
+    )
+    row.writing_guidance = writing_guidance
+    db.commit()
+    db.refresh(row)
+    return _outline_to_dict(row)
 
 
 def reapply_outline_generation_mode(db: Session, project: Project) -> int:
@@ -892,6 +979,7 @@ def scale_leaves_to_total_words(db: Session, project: Project, total_words: int)
                 content_boundary=parsed["content_boundary"],
                 target_words=scaled,
                 split_origin=bool(parsed.get("split_origin")),
+                style_tier=parsed.get("style_tier"),
             )
     save_outline_tree(db, project.id, nodes)
     return len(rows)

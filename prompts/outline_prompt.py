@@ -318,6 +318,67 @@ def _format_requirements(requirements: list[dict]) -> tuple[str, str]:
     return risk_block, all_block
 
 
+LEAF_GUIDANCE_SYSTEM_PROMPT = """## TASK
+你是工程投标技术方案大纲策划专家。针对**单个叶子章节**，重新生成「写作要点」与「内容边界」。
+推理在内部完成，只输出 JSON，不输出解释或 Markdown。
+
+## RULES
+- writing_guidance：写作要点，≤30 字，动词短语，说明「写什么」而非「怎么写」
+- content_boundary：80~200 字，说明本节写什么、不写什么、须回应的评分关注点
+- 必须贴合章节标题与已绑定评分项；不要编造评分项 ID
+- 遵守用户消息中的写作风格档位要求
+
+## OUTPUT FORMAT
+仅输出一个 JSON 对象：
+{"writing_guidance": "...", "content_boundary": "..."}"""
+
+
+def build_leaf_guidance_user_prompt(
+    global_info: dict,
+    leaf: dict,
+    requirements: list[dict],
+    *,
+    style_tier: str | None = None,
+) -> str:
+    from services.writing_guidance import style_tier_hint, style_tier_label
+
+    tier = style_tier or leaf.get("style_tier")
+    req_ids = set(leaf.get("requirement_ids") or [])
+    bound = [r for r in requirements if r.get("id") in req_ids]
+    bound_lines = []
+    for r in bound:
+        bound_lines.append(
+            f"- ID={r['id']} | {r.get('title') or ''} | 分值={r.get('score_value')} | "
+            f"刚性={r.get('is_risk_item')}"
+        )
+    bound_block = "\n".join(bound_lines) if bound_lines else "（未绑定评分项）"
+    project_name = global_info.get("project_name") or global_info.get("工程名称") or ""
+    project_type = global_info.get("project_type") or global_info.get("工程类型") or ""
+
+    return f"""<project>
+项目名称：{project_name}
+工程类型：{project_type}
+</project>
+
+<style_tier>
+档位：{style_tier_label(tier)}
+要求：{style_tier_hint(tier)}
+</style_tier>
+
+<leaf>
+id：{leaf.get('id') or ''}
+标题：{leaf.get('title') or ''}
+当前写作要点：{leaf.get('guidance_brief') or leaf.get('brief') or '（无）'}
+当前内容边界：{leaf.get('content_boundary') or '（无）'}
+</leaf>
+
+<bound_requirements>
+{bound_block}
+</bound_requirements>
+
+请重新生成该叶子章节的 writing_guidance 与 content_boundary。仅输出 JSON。"""
+
+
 def _format_catalog(catalog: list[dict]) -> str:
     lines: list[str] = []
     level1_titles: list[str] = []

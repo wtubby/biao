@@ -18,8 +18,6 @@ import {
   isWorkflowStepDone,
 } from '../../constants/workflow.js';
 import { isWorkflowStepKey } from '../../lib/hashRoute.js';
-import { MacroWorkflowBar } from '../../components/MacroWorkflowBar.jsx';
-import { getMacroWorkflowState } from '../../constants/macroWorkflow.js';
 import { PROJECT_STATUS_LABELS } from '../../constants/project.js';
 import { Icon } from '../../components/icons.jsx';
 import {
@@ -33,7 +31,6 @@ import {
   PreviewExport,
   SourcePreviewPane,
 } from './lazyPanels.js';
-import { UploadConfigPanel } from '../parse/UploadConfigPanel.jsx';
 import { UploadStepPanel } from '../parse/UploadStepPanel.jsx';
 
 function ProjectWorkspace({
@@ -56,8 +53,17 @@ function ProjectWorkspace({
   const [hasGeneratedChapter, setHasGeneratedChapter] = useState(false);
   const [sourceHighlight, setSourceHighlight] = useState(null);
   const [confirmWizardStep, setConfirmWizardStep] = useState(1);
+  const [outlineFooter, setOutlineFooter] = useState({
+    canRegenerate: false,
+    canWrite: false,
+    regenerating: false,
+    locking: false,
+    locked: false,
+    statusReady: false,
+  });
   const parseTimedOutRef = useRef(false);
   const confirmWizardInitRef = useRef(false);
+  const outlineEditorRef = useRef(null);
   const onPageChangeRef = useRef(onPageChange);
   const routeValidatedRef = useRef(false);
 
@@ -305,7 +311,6 @@ function ProjectWorkspace({
 
   const currentStepIndex = STEP_ORDER.indexOf(currentPage);
   const workflowProgress = getWorkflowProgressByStatus(project.status);
-  const macroWorkflowSteps = getMacroWorkflowState(currentPage, stepAccess, project.status);
 
   const goPrev = () => {
     if (currentPage === 'confirm' && confirmWizardStep > 1) {
@@ -434,7 +439,6 @@ function ProjectWorkspace({
           statusText={PROJECT_STATUS_LABELS[project.status] || project.status}
           workflowProgress={workflowProgress}
         />
-        <MacroWorkflowBar steps={macroWorkflowSteps} />
         <div className="workspace-main-scroll">
         <PageSuspense>
         <div className="workspace-main-content">
@@ -457,35 +461,20 @@ function ProjectWorkspace({
             </div>
           </Card>
 
-          <div className="upload-dual-actions">
-            <Card
-              title="上传与解析"
-              className="section-card upload-dual-action-card"
-              variant="borderless"
-              style={{ marginTop: 0 }}
-            >
-              <UploadStepPanel
-                project={project}
-                loadingProject={loadingProject}
-                uploading={uploading}
-                parseTimedOut={parseTimedOut}
-                onUpload={handleUpload}
-              />
-            </Card>
-
-            <Card
-              title="生成配置"
-              className="section-card upload-dual-action-card"
-              variant="borderless"
-              style={{ marginTop: 0 }}
-            >
-              <UploadConfigPanel
-                projectId={project.id}
-                project={project}
-                onProjectChange={(patch) => setProject((p) => ({ ...p, ...patch }))}
-              />
-            </Card>
-          </div>
+          <Card
+            title="上传与解析"
+            className="section-card upload-dual-action-card"
+            variant="borderless"
+            style={{ marginTop: 0 }}
+          >
+            <UploadStepPanel
+              project={project}
+              loadingProject={loadingProject}
+              uploading={uploading}
+              parseTimedOut={parseTimedOut}
+              onUpload={handleUpload}
+            />
+          </Card>
         </div>
       )}
 
@@ -533,11 +522,11 @@ function ProjectWorkspace({
 
       {currentPage === 'outline' && (
         <OutlineEditor
+          ref={outlineEditorRef}
           projectId={project.id}
           projectStatus={project.status}
           targetPages={project.target_pages ?? 40}
-          generationMode={project.generation_mode || 'full'}
-          onGenerationModeChange={(mode) => setProject((p) => ({ ...p, generation_mode: mode }))}
+          onFooterStateChange={setOutlineFooter}
           onLocked={(result) => {
             setProject((p) => ({ ...p, status: result?.status || 'outline_locked' }));
             setOutlineLocked(true);
@@ -582,37 +571,45 @@ function ProjectWorkspace({
         <StepFooter
           extra={currentPage === 'confirm'
             ? confirmWizardExtras[confirmWizardStep] || confirmBlockReason
-            : currentPage === 'outline' && canGoGenerate
-                ? '大纲已锁定，可进入内容生成'
-                : currentPage === 'outline'
-                  ? '在本页完成定目录 → 深化审核 → 锁定'
-                  : `步骤 ${currentStepIndex + 1} / ${STEP_ORDER.length}`}
+            : currentPage === 'outline'
+              ? (outlineFooter.locked && outlineFooter.statusReady
+                ? '大纲已锁定'
+                : '确认后编写正文')
+              : `步骤 ${currentStepIndex + 1} / ${STEP_ORDER.length}`}
           onPrev={currentPage === 'confirm'
             ? (confirmWizardStep > 1 || currentStepIndex > 0 ? goPrev : null)
             : (currentStepIndex > 0 ? goPrev : null)}
           onNext={currentPage === 'preview'
             ? null
-            : (currentPage === 'confirm' ? goConfirmWizardNext : goNext)}
+            : (currentPage === 'confirm'
+              ? goConfirmWizardNext
+              : currentPage === 'outline'
+                ? (outlineFooter.locked && outlineFooter.statusReady
+                  ? goNext
+                  : () => outlineEditorRef.current?.writeBody?.())
+                : goNext)}
           nextLabel={
             currentPage === 'confirm'
               ? confirmWizardNextLabels[confirmWizardStep] || '下一步'
-              : currentPage === 'outline' && canGoGenerate
-                  ? '下一步：内容生成'
-                  : currentPage === 'outline'
-                    ? '请在上方完成锁定'
-                    : '下一步'
+              : currentPage === 'outline'
+                ? '编写正文'
+                : '下一步'
           }
           nextDisabled={currentPage === 'confirm'
             ? confirmNextDisabled
             : currentPage === 'outline'
-              ? !canGoGenerate
+              ? !(outlineFooter.canWrite || (outlineFooter.locked && outlineFooter.statusReady))
               : !nextStepAccessible}
           nextDisabledReason={currentPage === 'confirm'
             ? confirmNextDisabledReason
-            : currentPage === 'outline' && !canGoGenerate
-              ? '请先在大纲第 3 步点击「锁定并进入内容生成」'
+            : currentPage === 'outline' && !(outlineFooter.canWrite || (outlineFooter.locked && outlineFooter.statusReady))
+              ? '请先生成编写思路'
               : null}
-          nextLoading={currentPage === 'confirm' && confirmWizardStep === 4 ? confirming : false}
+          nextLoading={currentPage === 'confirm' && confirmWizardStep === 4
+            ? confirming
+            : currentPage === 'outline'
+              ? outlineFooter.locking
+              : false}
         />
         </div>
       </div>

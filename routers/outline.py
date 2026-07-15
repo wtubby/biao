@@ -26,6 +26,7 @@ from services.outline_service import (
     get_outline_tree,
     lock_outline,
     reapply_outline_generation_mode,
+    regenerate_leaf_guidance,
     save_outline_tree,
     scale_leaves_to_total_words,
     validate_coverage,
@@ -50,6 +51,7 @@ class OutlineNode(BaseModel):
     writing_guidance: str | None = None
     guidance_brief: str | None = None
     content_boundary: str | None = None
+    style_tier: str | None = None
 
 
 class OutlineSave(BaseModel):
@@ -62,6 +64,10 @@ class SplitLongLeavesBody(BaseModel):
 
 class GenerationModeUpdate(BaseModel):
     mode: str
+
+
+class LeafGuidanceRegenerate(BaseModel):
+    style_tier: str | None = None
 
 
 class GenerationConfigUpdate(BaseModel):
@@ -279,6 +285,29 @@ def generate_outline(project_id: str, db: Session = Depends(get_db)):
             "warnings": warnings,
             "message": "已根据用户目录深化大纲",
         }
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.post("/projects/{project_id}/outline/leaves/{leaf_id}/regenerate-guidance")
+def regenerate_leaf_guidance_api(
+    project_id: str,
+    leaf_id: str,
+    body: LeafGuidanceRegenerate | None = None,
+    db: Session = Depends(get_db),
+):
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(404, "项目不存在")
+    require_status(project, ALLOW_OUTLINE_SAVE, "重新生成编写思路")
+    try:
+        node = regenerate_leaf_guidance(
+            db,
+            project,
+            leaf_id,
+            style_tier=(body.style_tier if body else None),
+        )
+        return {"success": True, "node": node}
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 

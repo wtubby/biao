@@ -415,19 +415,6 @@ function GenerationPanel({
           <div className="gen-page-left">
             <div className="gen-page-section-title">
               <div className="shuxian" />
-              <span>生成目录</span>
-            </div>
-            <div className="gen-page-tree-wrap">
-              <Tree
-                treeData={treeData}
-                defaultExpandAll
-                selectedKeys={selectedId ? [selectedId] : []}
-                onSelect={handleTreeSelect}
-              />
-            </div>
-
-            <div className="gen-page-section-title gen-page-section-title--compact">
-              <div className="shuxian" />
               <span>生成配置</span>
             </div>
             <GenerationConfigPanel
@@ -445,51 +432,63 @@ function GenerationPanel({
               }}
             />
 
-            <div className="generation-progress-block generation-progress-block--compact">
-              <div className="generation-progress-label">
-                <Text strong>章节进度</Text>
-                <Text type="secondary">{progress.done} / {progress.total}</Text>
+            <div className="gen-page-control">
+              <div className="generation-progress-block generation-progress-block--compact">
+                <div className="generation-progress-label">
+                  <Text strong>章节进度</Text>
+                  <Text type="secondary">{progress.done} / {progress.total}</Text>
+                </div>
+                <Progress
+                  percent={progress.total ? Math.round((progress.done / progress.total) * 100) : 0}
+                  status={isBatchRunning ? 'active' : 'normal'}
+                  strokeColor="#2563eb"
+                  size="small"
+                />
+                <div className="generation-legend">
+                  <span className="generation-legend-item"><ChapterStatusIcon status="green" /> {statusCounts.green}</span>
+                  <span className="generation-legend-item"><ChapterStatusIcon status="yellow" /> {statusCounts.yellow}</span>
+                  <span className="generation-legend-item"><ChapterStatusIcon status="red" /> {statusCounts.red}</span>
+                  <span className="generation-legend-item"><ChapterStatusIcon status="pending" /> {statusCounts.pending}</span>
+                </div>
               </div>
-              <Progress
-                percent={progress.total ? Math.round((progress.done / progress.total) * 100) : 0}
-                status={isBatchRunning ? 'active' : 'normal'}
-                strokeColor="#2563eb"
-                size="small"
-              />
-              <div className="generation-legend">
-                <span className="generation-legend-item"><ChapterStatusIcon status="green" /> {statusCounts.green}</span>
-                <span className="generation-legend-item"><ChapterStatusIcon status="yellow" /> {statusCounts.yellow}</span>
-                <span className="generation-legend-item"><ChapterStatusIcon status="red" /> {statusCounts.red}</span>
-                <span className="generation-legend-item"><ChapterStatusIcon status="pending" /> {statusCounts.pending}</span>
-              </div>
+
+              <Space className="gen-page-actions" wrap>
+                {!isBatchRunning && !paused && !hasDoneChapters && (
+                  <Button
+                    type="primary"
+                    className="generate-btn-primary"
+                    onClick={() => requestBatchGenerate(false)}
+                    disabled={!canGenerateContent || leaves.length === 0}
+                  >
+                    生成标书
+                  </Button>
+                )}
+                {isBatchRunning && (
+                  <Button type="primary" danger onClick={pauseBatchGenerate}>暂停生成</Button>
+                )}
+                {paused && (
+                  <Button type="primary" onClick={() => requestBatchGenerate(true)}>继续生成</Button>
+                )}
+                {!isBatchRunning && !paused && hasDoneChapters && (
+                  <Button onClick={() => runBatchGenerate(true)} disabled={!canGenerateContent}>
+                    重新生成未完成章节
+                  </Button>
+                )}
+              </Space>
             </div>
 
-            <Space className="gen-page-actions" wrap>
-              {!isBatchRunning && !paused && !hasDoneChapters && (
-                <Button
-                  type="primary"
-                  className="generate-btn-primary"
-                  onClick={() => requestBatchGenerate(false)}
-                  disabled={!canGenerateContent || leaves.length === 0}
-                >
-                  生成标书
-                </Button>
-              )}
-              {isBatchRunning && (
-                <Button type="primary" danger onClick={pauseBatchGenerate}>暂停生成</Button>
-              )}
-              {paused && (
-                <Button type="primary" onClick={() => requestBatchGenerate(true)}>继续生成</Button>
-              )}
-              {!isBatchRunning && !paused && hasDoneChapters && (
-                <Button onClick={() => runBatchGenerate(true)} disabled={!canGenerateContent}>
-                  重新生成未完成章节
-                </Button>
-              )}
-              {selected && (
-                <Button size="small" onClick={() => setPromptOpen(true)}>查看提示词</Button>
-              )}
-            </Space>
+            <div className="gen-page-section-title gen-page-section-title--compact">
+              <div className="shuxian" />
+              <span>生成目录</span>
+            </div>
+            <div className="gen-page-tree-wrap">
+              <Tree
+                treeData={treeData}
+                defaultExpandAll
+                selectedKeys={selectedId ? [selectedId] : []}
+                onSelect={handleTreeSelect}
+              />
+            </div>
 
             <p className="gen-ai-hint">本标书由 AI 生成，需要人工审核，请注意甄别。</p>
           </div>
@@ -503,6 +502,16 @@ function GenerationPanel({
                 <Text type="secondary" className="gen-page-preview-subtitle">
                   {selected.title}
                 </Text>
+              )}
+              {selected && (
+                <Button
+                  size="small"
+                  type="link"
+                  className="gen-page-preview-prompt"
+                  onClick={() => setPromptOpen(true)}
+                >
+                  查看提示词
+                </Button>
               )}
             </div>
             <div className="gen-page-preview">

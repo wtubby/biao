@@ -20,7 +20,22 @@ function PageHeader({ title, description, extra, tags }) {
   );
 }
 
-function StepFooter({ extra, onPrev, onNext, prevLabel, nextLabel, prevDisabled, nextDisabled, nextLoading, nextDisabledReason }) {
+function StepFooter({
+  extra,
+  onPrev,
+  onNext,
+  onSecondary,
+  prevLabel,
+  nextLabel,
+  secondaryLabel,
+  prevDisabled,
+  nextDisabled,
+  secondaryDisabled,
+  nextLoading,
+  secondaryLoading,
+  nextDisabledReason,
+  secondaryDisabledReason,
+}) {
   const nextButton = (
     <Button
       type="primary"
@@ -32,6 +47,16 @@ function StepFooter({ extra, onPrev, onNext, prevLabel, nextLabel, prevDisabled,
     </Button>
   );
 
+  const secondaryButton = onSecondary ? (
+    <Button
+      onClick={onSecondary}
+      disabled={secondaryDisabled}
+      loading={secondaryLoading}
+    >
+      {secondaryLabel || '次要操作'}
+    </Button>
+  ) : null;
+
   return (
     <div className="step-footer">
       <div className="step-footer-extra">{extra}</div>
@@ -40,6 +65,11 @@ function StepFooter({ extra, onPrev, onNext, prevLabel, nextLabel, prevDisabled,
           <Button onClick={onPrev} disabled={prevDisabled}>
             {prevLabel || '上一步'}
           </Button>
+        )}
+        {secondaryButton && (
+          secondaryDisabled && secondaryDisabledReason
+            ? <Tooltip title={secondaryDisabledReason}>{secondaryButton}</Tooltip>
+            : secondaryButton
         )}
         {onNext && (
           nextDisabled && nextDisabledReason

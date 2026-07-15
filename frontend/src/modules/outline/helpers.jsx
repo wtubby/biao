@@ -181,6 +181,7 @@ function createOutlineNode({ parentId = null, title = '新章节' }) {
     requirement_ids: [],
     guidance_brief: '',
     content_boundary: '',
+    style_tier: 'balanced',
     target_words: 0,
     review_status: 'init',
   };
@@ -201,6 +202,7 @@ function serializeOutlineNodesForSave(nodes) {
     if (item.is_leaf === 1) {
       item.guidance_brief = n.guidance_brief || '';
       item.content_boundary = n.content_boundary || '';
+      item.style_tier = n.style_tier || 'balanced';
     }
     return item;
   });

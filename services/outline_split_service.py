@@ -291,6 +291,7 @@ def apply_leaf_split(
     child_level = int(leaf.get("level") or 1) + 1
     parent_req_ids = list(leaf.get("requirement_ids") or [])
     inherited_folder = leaf.get("bound_folder")
+    inherited_style = leaf.get("style_tier") or parse_writing_guidance(leaf.get("writing_guidance")).get("style_tier")
     assigned_specs = _assign_requirement_ids(child_specs, parent_req_ids, requirements)
 
     leaf["is_leaf"] = 0
@@ -299,6 +300,7 @@ def apply_leaf_split(
     leaf.pop("guidance_brief", None)
     leaf.pop("content_boundary", None)
     leaf.pop("target_words", None)
+    leaf.pop("style_tier", None)
 
     new_children: list[dict] = []
     for idx, spec in enumerate(assigned_specs, start=1):
@@ -315,11 +317,13 @@ def apply_leaf_split(
             "requirement_ids": list(spec.get("requirement_ids") or []),
             "guidance_brief": spec["guidance_brief"],
             "content_boundary": spec["content_boundary"],
+            "style_tier": inherited_style,
             "writing_guidance": serialize_writing_guidance(
                 brief=spec["guidance_brief"],
                 content_boundary=spec["content_boundary"],
                 target_words=per_child,
                 split_origin=True,
+                style_tier=inherited_style,
             ),
         })
 

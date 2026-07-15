@@ -193,9 +193,35 @@ function DisplayModeSwitch({ value, onChange, disabled, loading }) {
   );
 }
 
+function ChapterStyleSwitch({ value, onChange, disabled, loading, size = 'default' }) {
+  const options = [
+    { key: 'rigorous', label: '严谨' },
+    { key: 'balanced', label: '均衡' },
+    { key: 'innovative', label: '创新' },
+  ];
+
+  return (
+    <div data-fg="chapter-style" className={`chapter-style-switch${size === 'small' ? ' is-small' : ''}`}>
+      <PillSwitch
+        switchClass="chapter-style-inner"
+        pillClass="chapter-style-pill"
+        role="radiogroup"
+        ariaLabel="章节写作风格"
+        options={options}
+        value={value || 'balanced'}
+        onChange={onChange}
+        disabled={disabled}
+        loading={loading}
+        itemRole="radio"
+      />
+    </div>
+  );
+}
+
 export {
   OutlineStepRow,
   OutlineStepNav,
   DirectorySourceSwitch,
   DisplayModeSwitch,
+  ChapterStyleSwitch,
 };
