@@ -169,13 +169,19 @@ function TenderDetailPanel({
   const saveNotice = async () => {
     try {
       const values = await noticeForm.validateFields();
+      // 只提交用户真正碰过的字段，避免后端把未改字段一并标为「手动确认」
+      const notice = {};
+      Object.entries(values).forEach(([key, value]) => {
+        if (noticeForm.isFieldTouched(key)) {
+          notice[key] = value;
+        }
+      });
+      if (Object.prototype.hasOwnProperty.call(notice, 'blind_bid')) {
+        notice.blind_bid = notice.blind_bid === 'true' ? true
+          : notice.blind_bid === 'false' ? false : null;
+      }
       setSavingSection('notice');
-      const body = {
-        notice: {
-          ...values,
-          blind_bid: values.blind_bid === 'true' ? true : values.blind_bid === 'false' ? false : null,
-        },
-      };
+      const body = { notice };
       const updated = await updateTenderDetail(projectId, body);
       setDetail(updated);
       // 以服务端 Project 为准刷新门禁字段（含 duration_days / target_pages 解析结果）

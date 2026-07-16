@@ -40,6 +40,39 @@ def protectable_fields_from_notice_keys(touched_keys: set[str] | list[str]) -> l
     return fields
 
 
+def notice_values_equal(old: Any, new: Any) -> bool:
+    """判断 notice 字段新旧值是否等价（兼容 None/空串、数值类型差异）。"""
+    if old is None and new is None:
+        return True
+    if isinstance(old, bool) or isinstance(new, bool):
+        return old is new
+    if isinstance(old, (int, float)) or isinstance(new, (int, float)):
+        if old in (None, "") or new in (None, ""):
+            return False
+        try:
+            return float(old) == float(new)
+        except (TypeError, ValueError):
+            return False
+    old_n = "" if old is None else old
+    new_n = "" if new is None else new
+    if isinstance(old_n, str) and isinstance(new_n, str):
+        return old_n.strip() == new_n.strip()
+    return old_n == new_n
+
+
+def protectable_fields_from_notice_changes(
+    stored_notice: dict[str, Any] | None,
+    touched: dict[str, Any],
+) -> list[str]:
+    """只保护相对已存 notice 值确实发生变化的字段（避免全量表单提交误锁）。"""
+    stored = stored_notice if isinstance(stored_notice, dict) else {}
+    changed_keys = [
+        key for key, value in touched.items()
+        if not notice_values_equal(stored.get(key), value)
+    ]
+    return protectable_fields_from_notice_keys(changed_keys)
+
+
 def empty_notice() -> dict[str, Any]:
     return {
         "project_name": None,

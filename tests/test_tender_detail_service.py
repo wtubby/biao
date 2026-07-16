@@ -5,6 +5,8 @@ from services.tender_detail_service import (
     get_tender_detail,
     mark_fields_manually_confirmed,
     merge_tender_detail,
+    notice_values_equal,
+    protectable_fields_from_notice_changes,
     protectable_fields_from_notice_keys,
     save_tender_detail_from_extraction,
     set_tender_detail,
@@ -31,6 +33,33 @@ def test_protectable_fields_from_notice_keys_only_maps_touched():
     assert set(protectable_fields_from_notice_keys([
         "project_name", "duration_text", "bid_domain", "blind_bid", "tenderer",
     ])) == {"name", "duration_days", "engineering_domain"}
+
+
+def test_protectable_fields_from_notice_changes_ignores_unchanged_values():
+    stored = {
+        "project_name": "电缆工程",
+        "voltage_level": "10kV",
+        "location": "成都",
+        "budget_yuan": 1000000.0,
+        "target_pages": 40,
+    }
+    touched = {
+        "project_name": "电缆工程",
+        "voltage_level": "10kV",
+        "location": "成都",
+        "budget_yuan": 1000000,
+        "target_pages": 40,
+        "blind_bid": True,
+        "capacity": "新建 2km",
+    }
+    assert protectable_fields_from_notice_changes(stored, touched) == ["capacity"]
+
+
+def test_notice_values_equal_treats_none_and_empty_string_as_same():
+    assert notice_values_equal(None, "")
+    assert notice_values_equal("", None)
+    assert not notice_values_equal(None, "10kV")
+    assert notice_values_equal(40, 40.0)
 
 
 def test_apply_notice_to_project_parses_calendar_ri_duration():

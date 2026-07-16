@@ -38,3 +38,33 @@ def test_tender_detail_patch_notice_marks_only_touched_protectable_fields():
 
     confirmed = set(get_meta(project).get("manually_confirmed_fields") or [])
     assert confirmed == {"voltage_level"}
+
+
+def test_tender_detail_patch_full_form_only_locks_changed_fields():
+    """前端若提交全部表单字段，未改动的值不得打上手动确认标记。"""
+    project = Project(id="p-full", name="电缆工程", status="confirming", created_at=datetime(2026, 1, 1))
+    set_tender_detail(project, {
+        "notice": {
+            "project_name": "电缆工程",
+            "voltage_level": "10kV",
+            "location": "成都",
+            "duration_text": "60个日历天",
+            "bid_domain": "电力工程",
+        },
+    })
+
+    body = TenderDetailUpdate(
+        notice=TenderNoticeUpdate(
+            project_name="电缆工程",
+            voltage_level="35kV",
+            location="成都",
+            duration_text="60个日历天",
+            bid_domain="电力工程",
+            blind_bid=False,
+        ),
+    )
+    with patch("routers.parse.apply_notice_to_project"):
+        update_project_tender_detail("p-full", body, db=_mock_db(project))
+
+    confirmed = set(get_meta(project).get("manually_confirmed_fields") or [])
+    assert confirmed == {"voltage_level"}

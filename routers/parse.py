@@ -26,7 +26,7 @@ from services.tender_detail_service import (
     empty_tender_detail,
     get_tender_detail,
     mark_fields_manually_confirmed,
-    protectable_fields_from_notice_keys,
+    protectable_fields_from_notice_changes,
     set_tender_detail,
 )
 from routers.deps import find_source_file
@@ -222,11 +222,12 @@ def update_project_tender_detail(
     if body.notice is not None:
         notice = detail.setdefault("notice", empty_tender_detail()["notice"])
         touched = body.notice.model_dump(exclude_unset=True)
+        # 仅对值相对已存 notice 真正变化的字段打「手动确认」，避免全量表单提交误锁
+        confirm_fields = protectable_fields_from_notice_changes(notice, touched)
         for key, value in touched.items():
             notice[key] = value
-        # 用户在招标详情面板保存，属于明确确认：强制回填并打标记
+        # 用户在招标详情面板保存：强制回填 project；锁定仅限实际改动字段
         apply_notice_to_project(project, notice, force=True)
-        confirm_fields = protectable_fields_from_notice_keys(touched.keys())
         if confirm_fields:
             mark_fields_manually_confirmed(project, confirm_fields)
 
