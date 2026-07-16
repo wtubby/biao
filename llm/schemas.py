@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 
 class QAResult(BaseModel):
-    """软质检 LLM 输出。"""
+    """软质检 LLM 输出（单窗/全文）。"""
 
     model_config = ConfigDict(extra="ignore")
 
@@ -38,6 +38,27 @@ class QAResult(BaseModel):
         if isinstance(value, str) and value.strip():
             return [value.strip()]
         return []
+
+
+class QASegmentResult(QAResult):
+    """多窗软质检中单个窗口的结果。"""
+
+    label: str = ""
+
+
+class QAMultiWindowResult(BaseModel):
+    """长文头/中/尾多窗一次性软质检输出。"""
+
+    model_config = ConfigDict(extra="ignore")
+
+    segments: list[QASegmentResult] = Field(default_factory=list)
+
+    @field_validator("segments", mode="before")
+    @classmethod
+    def _coerce_segments(cls, value: Any) -> list:
+        if not isinstance(value, list):
+            return []
+        return [item for item in value if isinstance(item, dict)]
 
 
 class WriterOutputSchema(BaseModel):

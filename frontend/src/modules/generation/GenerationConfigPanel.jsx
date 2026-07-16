@@ -84,8 +84,11 @@ function GenerationConfigPanel({
   const [saving, setSaving] = useState(false);
   const [pagesSaving, setPagesSaving] = useState(false);
   const [config, setConfig] = useState(null);
+  const [refDirty, setRefDirty] = useState(false);
+  const [customWordsDirty, setCustomWordsDirty] = useState(false);
   const savedReferenceTextRef = useRef('');
   const draftReferenceTextRef = useRef('');
+  const savedCustomTotalWordsRef = useRef(null);
   const pagesPatchSeqRef = useRef(0);
 
   const applyConfigResult = (data) => {
@@ -94,6 +97,9 @@ function GenerationConfigPanel({
     const refText = rest.reference_bid_text || '';
     savedReferenceTextRef.current = refText;
     draftReferenceTextRef.current = refText;
+    savedCustomTotalWordsRef.current = rest.custom_total_words ?? null;
+    setRefDirty(false);
+    setCustomWordsDirty(false);
     return rest;
   };
 
@@ -124,8 +130,13 @@ function GenerationConfigPanel({
           || Object.prototype.hasOwnProperty.call(patch, 'custom_total_words'),
         quiet,
       });
+      if (options.successMessage) {
+        message.success(options.successMessage);
+      }
+      return cleaned;
     } catch (e) {
       message.error(e.message);
+      return null;
     } finally {
       if (!quiet) setSaving(false);
     }
@@ -317,9 +328,13 @@ function GenerationConfigPanel({
                 onChange={(e) => {
                   if (!e.target.checked) {
                     patchConfig({ custom_word_count: false });
-                  } else {
-                    setConfig((c) => ({ ...c, custom_word_count: true }));
+                    return;
                   }
+                  const words = config.custom_total_words || estimate.total_words;
+                  patchConfig({
+                    custom_word_count: true,
+                    custom_total_words: words,
+                  }, { successMessage: '已启用自定义字数' });
                 }}
               >
                 自定义字数
@@ -333,22 +348,23 @@ function GenerationConfigPanel({
                     max={500000}
                     disabled={busy}
                     value={config.custom_total_words || estimate.total_words || ''}
-                    onChange={(e) => setConfig((c) => ({
-                      ...c,
-                      custom_total_words: e.target.value ? Number(e.target.value) : null,
-                    }))}
+                    onChange={(e) => {
+                      const next = e.target.value ? Number(e.target.value) : null;
+                      setConfig((c) => ({ ...c, custom_total_words: next }));
+                      setCustomWordsDirty(next !== savedCustomTotalWordsRef.current);
+                    }}
                     placeholder="总字数"
                   />
                   <button
                     type="button"
-                    className="generation-config-inline-btn"
-                    disabled={busy}
+                    className={`generation-config-inline-btn${customWordsDirty ? ' generation-config-inline-btn--pending' : ''}`}
+                    disabled={busy || !customWordsDirty}
                     onClick={() => patchConfig({
                       custom_word_count: true,
                       custom_total_words: config.custom_total_words || estimate.total_words,
-                    })}
+                    }, { successMessage: '已应用自定义字数' })}
                   >
-                    应用
+                    {customWordsDirty ? '应用 · 未保存' : '已同步'}
                   </button>
                 </div>
               )}
@@ -445,21 +461,25 @@ function GenerationConfigPanel({
                   const next = e.target.value;
                   draftReferenceTextRef.current = next;
                   setConfig((c) => ({ ...c, reference_bid_text: next }));
-                }}
-                onBlur={() => {
-                  const next = draftReferenceTextRef.current || '';
-                  if (next === savedReferenceTextRef.current) return;
-                  patchConfig({ reference_bid_text: next });
+                  setRefDirty(next !== savedReferenceTextRef.current);
                 }}
               />
-              <button
-                type="button"
-                className="generation-config-inline-btn"
-                disabled={busy}
-                onClick={() => patchConfig({ reference_bid_text: draftReferenceTextRef.current || '' })}
-              >
-                保存文本
-              </button>
+              <div className="generation-config-ref-footer">
+                {refDirty && (
+                  <Text type="warning" className="generation-config-meta">未保存</Text>
+                )}
+                <button
+                  type="button"
+                  className={`generation-config-inline-btn${refDirty ? ' generation-config-inline-btn--pending' : ''}`}
+                  disabled={busy || !refDirty}
+                  onClick={() => patchConfig(
+                    { reference_bid_text: draftReferenceTextRef.current || '' },
+                    { successMessage: '参考标书文本已保存' },
+                  )}
+                >
+                  保存文本
+                </button>
+              </div>
             </div>
           )}
 

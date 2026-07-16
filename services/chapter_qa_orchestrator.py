@@ -10,7 +10,7 @@ from config import (
 )
 from db.models import Project, TechOutline, TechRequirement
 from llm.llm_client import call_llm_json
-from llm.schemas import QAResult
+from llm.schemas import QAMultiWindowResult, QAResult
 from sqlalchemy.orm import Session
 from prompts.qa_prompt import (
     build_qa_chat_messages,
@@ -177,55 +177,80 @@ def _prefix_issues(issues: list, label: str) -> list[str]:
     return [f"[{label}] {item}" for item in (issues or []) if item]
 
 
-def run_soft_qa(content: str, bundle: dict) -> dict:
-    """长文按头/中/尾分段抽检并合并问题；任一段 skipped 则整体 skipped。"""
-    windows = sample_content_windows_for_qa(content)
+def _merge_multi_window_soft_qa(raw: dict, *, window_count: int) -> dict:
+    """将多窗结构化结果合并为与单窗一致的扁平 issues。"""
+    segments = raw.get("segments") or []
     coverage: list[str] = []
     faithfulness: list[str] = []
     scope: list[str] = []
     specificity: list[str] = []
     any_failed = False
+    for seg in segments:
+        if not isinstance(seg, dict):
+            continue
+        label = str(seg.get("label") or "").strip() or "片段"
+        if not seg.get("passed", True):
+            any_failed = True
+        coverage.extend(_prefix_issues(seg.get("coverage_issues"), label))
+        faithfulness.extend(_prefix_issues(seg.get("faithfulness_issues"), label))
+        scope.extend(_prefix_issues(seg.get("scope_issues"), label))
+        specificity.extend(_prefix_issues(seg.get("specificity_issues"), label))
+
+    coverage = list(dict.fromkeys(coverage))
+    faithfulness = list(dict.fromkeys(faithfulness))
+    scope = list(dict.fromkeys(scope))
+    specificity = list(dict.fromkeys(specificity))
+    has_issues = bool(coverage or faithfulness or scope or specificity)
+    return {
+        "passed": not any_failed and not has_issues,
+        "coverage_issues": coverage,
+        "faithfulness_issues": faithfulness,
+        "scope_issues": scope,
+        "specificity_issues": specificity,
+        "segments_checked": window_count,
+    }
+
+
+def _run_soft_qa_multi(windows: list[tuple[str, str]], bundle: dict) -> dict:
+    """长文多窗一次 LLM 调用，避免重复发送项目前缀。"""
+    raw = call_llm_json(
+        build_qa_chat_messages("", bundle, windows=windows),
+        role="qa",
+        schema=QAMultiWindowResult,
+    )
+    return _merge_multi_window_soft_qa(raw, window_count=len(windows))
+
+
+def run_soft_qa(content: str, bundle: dict) -> dict:
+    """长文头/中/尾多窗抽检；多窗合并为一次 LLM 调用。任一段失败则整体不通过。"""
+    windows = sample_content_windows_for_qa(content)
     try:
-        for label, body in windows:
-            segment_label = None if (len(windows) == 1 and label == "全文") else label
+        if len(windows) <= 1:
+            label, body = windows[0] if windows else ("全文", "")
+            segment_label = None if label == "全文" else label
             result = _run_soft_qa_once(body, bundle, segment_label=segment_label)
             if result.get("skipped"):
-                return {
-                    "passed": False,
-                    "skipped": True,
-                    "skip_reason": result.get("skip_reason") or f"{label}抽检失败",
-                    "coverage_issues": [],
-                    "faithfulness_issues": [],
-                    "scope_issues": [],
-                    "specificity_issues": [],
-                }
-            if not result.get("passed", True):
-                any_failed = True
-            prefix = label if segment_label else ""
-            if prefix:
-                coverage.extend(_prefix_issues(result.get("coverage_issues"), prefix))
-                faithfulness.extend(_prefix_issues(result.get("faithfulness_issues"), prefix))
-                scope.extend(_prefix_issues(result.get("scope_issues"), prefix))
-                specificity.extend(_prefix_issues(result.get("specificity_issues"), prefix))
-            else:
-                coverage.extend(result.get("coverage_issues") or [])
-                faithfulness.extend(result.get("faithfulness_issues") or [])
-                scope.extend(result.get("scope_issues") or [])
-                specificity.extend(result.get("specificity_issues") or [])
-        # 去重保序
-        coverage = list(dict.fromkeys(coverage))
-        faithfulness = list(dict.fromkeys(faithfulness))
-        scope = list(dict.fromkeys(scope))
-        specificity = list(dict.fromkeys(specificity))
-        has_issues = bool(coverage or faithfulness or scope or specificity)
-        return {
-            "passed": not any_failed and not has_issues,
-            "coverage_issues": coverage,
-            "faithfulness_issues": faithfulness,
-            "scope_issues": scope,
-            "specificity_issues": specificity,
-            "segments_checked": len(windows),
-        }
+                return result
+            coverage = list(result.get("coverage_issues") or [])
+            faithfulness = list(result.get("faithfulness_issues") or [])
+            scope = list(result.get("scope_issues") or [])
+            specificity = list(result.get("specificity_issues") or [])
+            if segment_label:
+                coverage = _prefix_issues(coverage, segment_label)
+                faithfulness = _prefix_issues(faithfulness, segment_label)
+                scope = _prefix_issues(scope, segment_label)
+                specificity = _prefix_issues(specificity, segment_label)
+            has_issues = bool(coverage or faithfulness or scope or specificity)
+            return {
+                "passed": bool(result.get("passed", True)) and not has_issues,
+                "coverage_issues": coverage,
+                "faithfulness_issues": faithfulness,
+                "scope_issues": scope,
+                "specificity_issues": specificity,
+                "segments_checked": 1,
+            }
+
+        return _run_soft_qa_multi(windows, bundle)
     except Exception as exc:
         logger.warning("软质检失败: %s", exc)
         return {

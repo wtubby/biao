@@ -33,6 +33,7 @@ from services.generation_mode import (
 )
 from services.catalog_parser import parse_catalog_text
 from config import TARGET_PAGES_DEFAULT, WORDS_PER_SCORE_PAGE
+from services.generation_config import normalize_custom_total_words, resolve_target_pages
 from services.writing_guidance import (
     default_content_boundary_for_title,
     get_chapter_type,
@@ -451,7 +452,10 @@ def generate_outline_ai(db: Session, project: Project) -> tuple[list[TechOutline
     all_nodes, dup_warnings = _ensure_unique_outline_ids(all_nodes)
     expand_warnings.extend(dup_warnings)
 
-    target_pages = int(get_meta(project).get("target_pages") or TARGET_PAGES_DEFAULT)
+    target_pages = resolve_target_pages(
+        get_meta(project).get("target_pages"),
+        default=TARGET_PAGES_DEFAULT,
+    )
     nodes = enrich_outline_nodes(
         all_nodes,
         req_dicts,
@@ -942,7 +946,10 @@ def reapply_outline_generation_mode(db: Session, project: Project) -> int:
         .all()
     )
     req_dicts = _req_dicts(requirements)
-    target_pages = int(get_meta(project).get("target_pages") or TARGET_PAGES_DEFAULT)
+    target_pages = resolve_target_pages(
+        get_meta(project).get("target_pages"),
+        default=TARGET_PAGES_DEFAULT,
+    )
     generation_mode = get_generation_mode(project)
     nodes = _outline_rows_to_enrich_nodes(rows)
     enriched = enrich_outline_nodes(
@@ -973,6 +980,10 @@ def reapply_outline_generation_mode(db: Session, project: Project) -> int:
 
 def scale_leaves_to_total_words(db: Session, project: Project, total_words: int) -> int:
     """按自定义总字数等比缩放叶子 target_words，保留已生成正文。"""
+    clamped = normalize_custom_total_words(total_words)
+    if clamped is None:
+        return 0
+    total_words = clamped
     rows = (
         db.query(TechOutline)
         .filter(TechOutline.project_id == project.id, TechOutline.is_leaf == 1)

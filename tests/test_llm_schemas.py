@@ -4,7 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from llm.llm_client import resolve_model
-from llm.schemas import QAResult, WriterOutputSchema
+from llm.schemas import QAMultiWindowResult, QAResult, WriterOutputSchema
 
 
 def test_qa_result_coerces_issue_lists():
@@ -22,6 +22,28 @@ def test_qa_result_ignores_extra_fields():
     result = QAResult.model_validate({"passed": True, "skipped": True, "unknown": 1})
     assert result.passed is True
     assert not hasattr(result, "skipped") or getattr(result, "skipped", None) is not True
+
+
+def test_qa_multi_window_result_merges_shape():
+    result = QAMultiWindowResult.model_validate({
+        "segments": [
+            {
+                "label": "开头",
+                "passed": True,
+                "coverage_issues": [],
+            },
+            {
+                "label": "中段",
+                "passed": False,
+                "coverage_issues": ["缺工序"],
+                "specificity_issues": ["未见电压等级"],
+            },
+        ],
+        "extra": 1,
+    })
+    assert len(result.segments) == 2
+    assert result.segments[1].coverage_issues == ["缺工序"]
+    assert result.segments[1].specificity_issues == ["未见电压等级"]
 
 
 def test_writer_output_schema_resolves_aliases():

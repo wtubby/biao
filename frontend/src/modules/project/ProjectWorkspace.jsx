@@ -186,6 +186,10 @@ function ProjectWorkspace({
   }, [project.status, pollProject]);
 
   const handleUpload = async (file) => {
+    if (['outline_locked', 'generating', 'done'].includes(project.status)) {
+      message.error('大纲已锁定或正文已生成，无法更换招标文件');
+      return false;
+    }
     setUploading(true);
     const formData = new FormData();
     formData.append('file', file);

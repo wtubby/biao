@@ -1,5 +1,5 @@
 import {
-  Input, Select, Button, Text, Alert, Option,
+  Input, Select, Button, Text, Alert, Option, Popconfirm,
 } from '../../globals.js';
 
 import { ChapterStyleSwitch } from './components.jsx';
@@ -13,8 +13,10 @@ function OutlineLeafDetail({
   regeneratingLeaf = null,
   locked = false,
   saving = false,
+  canUndoGuidance = false,
   onUpdateNode,
   onRegenerateGuidance,
+  onUndoGuidance,
   onSave,
 }) {
   if (!selectedNode) {
@@ -73,15 +75,35 @@ function OutlineLeafDetail({
         <div className="outline-leaf-detail-field outline-leaf-detail-field--grow">
           <div className="outline-leaf-detail-label-row">
             <Text type="secondary" className="outline-leaf-detail-label">编写思路</Text>
-            <Button
-              type="link"
-              size="small"
-              loading={regeneratingLeaf === selectedLeaf.id}
-              disabled={locked}
-              onClick={() => onRegenerateGuidance?.(selectedLeaf.id)}
-            >
-              重新生成
-            </Button>
+            <div className="outline-leaf-detail-actions">
+              {canUndoGuidance && (
+                <Button
+                  type="link"
+                  size="small"
+                  disabled={locked || regeneratingLeaf === selectedLeaf.id}
+                  onClick={() => onUndoGuidance?.(selectedLeaf.id)}
+                >
+                  撤销
+                </Button>
+              )}
+              <Popconfirm
+                title="重新生成将覆盖当前编写思路"
+                description="已手工修改的内容会丢失，确定继续？"
+                okText="重新生成"
+                cancelText="取消"
+                disabled={locked || regeneratingLeaf === selectedLeaf.id}
+                onConfirm={() => onRegenerateGuidance?.(selectedLeaf.id)}
+              >
+                <Button
+                  type="link"
+                  size="small"
+                  loading={regeneratingLeaf === selectedLeaf.id}
+                  disabled={locked}
+                >
+                  重新生成
+                </Button>
+              </Popconfirm>
+            </div>
           </div>
           <Input.TextArea
             className="outline-guidance-textarea"

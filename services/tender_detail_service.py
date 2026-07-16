@@ -7,6 +7,7 @@ from typing import Any
 from db.models import Project
 from domains.registry import DEFAULT_DOMAIN
 from services.duration_text import parse_duration_days_from_text
+from services.generation_config import normalize_target_pages
 from services.project_meta import get_meta, set_meta
 
 QUALIFICATION_TABS = ("资格性审查", "符合性审查", "废标项")
@@ -292,10 +293,10 @@ def apply_notice_to_project(
         except (TypeError, ValueError):
             pass
     if notice.get("target_pages") is not None and _can_write("target_pages"):
-        try:
-            meta_fields["target_pages"] = int(notice["target_pages"])
-        except (TypeError, ValueError):
-            pass
+        pages = normalize_target_pages(notice["target_pages"])
+        if pages is not None:
+            meta_fields["target_pages"] = pages
+            notice["target_pages"] = pages
     if meta_fields:
         set_meta(project, **meta_fields)
 

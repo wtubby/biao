@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from config import TARGET_PAGES_DEFAULT, UPLOAD_DIR
@@ -11,10 +11,13 @@ from db.database import get_db
 from db.models import Project, TechOutline, TechRequirement
 from services.typesetting_config import list_typesetting_options
 from services.generation_config import (
+    CUSTOM_TOTAL_WORDS_MAX,
+    CUSTOM_TOTAL_WORDS_MIN,
     TARGET_PAGES_MAX,
     TARGET_PAGES_MIN,
     get_generation_config,
     list_bid_category_options,
+    resolve_target_pages,
     update_generation_config,
 )
 from services.reference_bid_service import extract_reference_text_from_file
@@ -83,9 +86,17 @@ class GenerationConfigUpdate(BaseModel):
     reference_bid_text: str | None = None
     reference_bid_filename: str | None = None
     standards_pack: str | None = None
-    target_pages: int | None = None
+    target_pages: int | None = Field(
+        default=None,
+        ge=TARGET_PAGES_MIN,
+        le=TARGET_PAGES_MAX,
+    )
     custom_word_count: bool | None = None
-    custom_total_words: int | None = None
+    custom_total_words: int | None = Field(
+        default=None,
+        ge=CUSTOM_TOTAL_WORDS_MIN,
+        le=CUSTOM_TOTAL_WORDS_MAX,
+    )
     require_risk_binding: bool | None = None
     deep_humanize: bool | None = None
     bid_category: str | None = None
@@ -102,7 +113,10 @@ def _build_generation_payload(db: Session, project: Project) -> dict:
     config = get_generation_config(project)
     outline = get_outline_tree(db, project.id)
     leaves = _leaf_dicts_from_outline(outline)
-    target_pages = int(get_meta(project).get("target_pages") or TARGET_PAGES_DEFAULT)
+    target_pages = resolve_target_pages(
+        get_meta(project).get("target_pages"),
+        default=TARGET_PAGES_DEFAULT,
+    )
     estimate = estimate_from_leaves(
         leaves,
         target_pages,
@@ -152,28 +166,26 @@ def update_generation_config_api(
         can_rescale = project.status in ALLOW_GENERATION_CONFIG_RESCALE
 
         if target_pages is not None:
-            if target_pages < TARGET_PAGES_MIN or target_pages > TARGET_PAGES_MAX:
-                raise ValueError(
-                    f"目标页数须在 {TARGET_PAGES_MIN}~{TARGET_PAGES_MAX} 之间"
-                )
-            set_meta(project, target_pages=int(target_pages))
+            # 不可重算时也不改 target_pages，避免「页数/估字」与章节 target_words 脱节
             if can_rescale:
+                set_meta(project, target_pages=int(target_pages))
                 reapply_outline_generation_mode(db, project)
 
         if updates:
             update_generation_config(project, **updates)
 
         if custom_word_count and custom_total_words and custom_total_words > 0:
+            # 不可重算时也不写自定义字数配置，避免 UI「自定义 XX字」与章节 target_words 脱节
             if can_rescale:
                 scale_leaves_to_total_words(db, project, int(custom_total_words))
-            update_generation_config(
-                project,
-                custom_word_count=True,
-                custom_total_words=int(custom_total_words),
-            )
+                update_generation_config(
+                    project,
+                    custom_word_count=True,
+                    custom_total_words=int(custom_total_words),
+                )
         elif custom_word_count is False:
-            update_generation_config(project, custom_word_count=False, custom_total_words=None)
             if can_rescale:
+                update_generation_config(project, custom_word_count=False, custom_total_words=None)
                 reapply_outline_generation_mode(db, project)
 
         db.commit()
@@ -399,7 +411,10 @@ def save_outline(project_id: str, body: OutlineSave, db: Session = Depends(get_d
         }
         for r in requirements
     ]
-    target_pages = int(get_meta(project).get("target_pages") or TARGET_PAGES_DEFAULT)
+    target_pages = resolve_target_pages(
+        get_meta(project).get("target_pages"),
+        default=TARGET_PAGES_DEFAULT,
+    )
     generation_mode = get_generation_mode(project)
     nodes = enrich_outline_nodes(
         [n.model_dump() for n in body.nodes], req_dicts, target_pages, generation_mode=generation_mode,

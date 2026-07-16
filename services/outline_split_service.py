@@ -20,6 +20,7 @@ from db.models import Project, TechOutline, TechRequirement
 from llm.llm_client import call_llm_json
 from prompts.outline_split_prompt import build_split_user_prompt, get_split_system_prompt
 from services.generation_mode import get_generation_mode
+from services.generation_config import resolve_target_pages
 from services.outline_boundary_rules import sanitize_leaf_content_boundaries
 from services.outline_order import reorder_outline_dict_nodes, sort_outline_tree_dfs
 from services.outline_service import (
@@ -414,7 +415,10 @@ def split_long_leaves(
             "message": "没有需要拆分的长章节",
         }
 
-    target_pages = int(get_meta(project).get("target_pages") or TARGET_PAGES_DEFAULT)
+    target_pages = resolve_target_pages(
+        get_meta(project).get("target_pages"),
+        default=TARGET_PAGES_DEFAULT,
+    )
     generation_mode = get_generation_mode(project)
     enriched = enrich_outline_nodes(
         current_nodes, req_dicts, target_pages, generation_mode=generation_mode,

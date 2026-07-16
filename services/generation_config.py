@@ -10,6 +10,36 @@ from services.project_meta import get_meta, set_meta
 
 TARGET_PAGES_MIN = 10
 TARGET_PAGES_MAX = 1200
+CUSTOM_TOTAL_WORDS_MIN = 3000
+CUSTOM_TOTAL_WORDS_MAX = 500000
+
+
+def normalize_target_pages(value: Any) -> int | None:
+    """将 target_pages 解析并钳制到 [TARGET_PAGES_MIN, TARGET_PAGES_MAX]；非法则返回 None。"""
+    if value is None or value == "":
+        return None
+    try:
+        pages = int(value)
+    except (TypeError, ValueError):
+        return None
+    return max(TARGET_PAGES_MIN, min(TARGET_PAGES_MAX, pages))
+
+
+def normalize_custom_total_words(value: Any) -> int | None:
+    """将 custom_total_words 解析并钳制到合法区间；非法则返回 None。"""
+    if value is None or value == "":
+        return None
+    try:
+        words = int(value)
+    except (TypeError, ValueError):
+        return None
+    return max(CUSTOM_TOTAL_WORDS_MIN, min(CUSTOM_TOTAL_WORDS_MAX, words))
+
+
+def resolve_target_pages(value: Any, *, default: int) -> int:
+    """读取/使用 target_pages 时的安全解析，避免脏数据抬高全书篇幅。"""
+    pages = normalize_target_pages(value)
+    return pages if pages is not None else int(default)
 
 GENERATION_MODE_FULL = "full"
 GENERATION_MODE_COMPACT = "compact"

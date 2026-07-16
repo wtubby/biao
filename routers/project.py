@@ -3,7 +3,7 @@ from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from config import UPLOAD_DIR
@@ -15,6 +15,7 @@ from services.facts_service import init_default_facts, sync_basic_info_fact
 from services.knowledge_registry import get_knowledge_folders
 from routers.deps import find_source_file
 from services.outline_catalog_source import apply_catalog_source, get_catalog_payload
+from services.generation_config import TARGET_PAGES_MAX, TARGET_PAGES_MIN
 from services.generation_mode import get_generation_mode
 from services.outline_service import get_user_catalog, save_user_catalog
 from services.project_meta import get_meta, get_parse_error, get_parse_progress, set_meta
@@ -90,7 +91,7 @@ class GlobalParamsUpdate(BaseModel):
     capacity: str | None = None
     extra_notes: str | None = None
     transformer_count: str | None = None
-    target_pages: int | None = None
+    target_pages: int | None = Field(default=None, ge=TARGET_PAGES_MIN, le=TARGET_PAGES_MAX)
 
 
 class OutlineCatalogSave(BaseModel):

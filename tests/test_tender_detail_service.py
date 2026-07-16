@@ -13,7 +13,8 @@ from services.tender_detail_service import (
     _normalize_qualification_items,
     _parse_duration_days,
 )
-from services.project_meta import set_meta
+from services.generation_config import TARGET_PAGES_MAX, TARGET_PAGES_MIN
+from services.project_meta import get_meta, set_meta
 from db.database import SessionLocal, init_db
 from db.models import Project
 import uuid
@@ -81,6 +82,31 @@ def test_apply_notice_to_project_parses_calendar_ri_duration():
         db.refresh(project)
 
         assert project.duration_days == 180
+    finally:
+        db.close()
+
+
+def test_apply_notice_to_project_clamps_target_pages():
+    init_db()
+    db = SessionLocal()
+    try:
+        pid = str(uuid.uuid4())
+        project = Project(id=pid, status="confirming")
+        db.add(project)
+        db.commit()
+
+        notice_hi = {"target_pages": 5_000_000}
+        apply_notice_to_project(project, notice_hi, force=True)
+        assert get_meta(project).get("target_pages") == TARGET_PAGES_MAX
+        assert notice_hi["target_pages"] == TARGET_PAGES_MAX
+
+        notice_lo = {"target_pages": 1}
+        apply_notice_to_project(project, notice_lo, force=True)
+        assert get_meta(project).get("target_pages") == TARGET_PAGES_MIN
+        assert notice_lo["target_pages"] == TARGET_PAGES_MIN
+
+        apply_notice_to_project(project, {"target_pages": "not-a-number"}, force=True)
+        assert get_meta(project).get("target_pages") == TARGET_PAGES_MIN
     finally:
         db.close()
 

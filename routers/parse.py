@@ -4,13 +4,14 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from config import UPLOAD_DIR
 from db.database import SessionLocal, get_db
 from db.models import Project, TechRequirement
 from services.background_jobs import spawn_sync
+from services.generation_config import TARGET_PAGES_MAX, TARGET_PAGES_MIN
 from services.parser_service import process_upload
 from services.project_meta import (
     PARSE_STAGE_READING,
@@ -85,7 +86,7 @@ class TenderNoticeUpdate(BaseModel):
     voltage_level: str | None = None
     capacity: str | None = None
     location: str | None = None
-    target_pages: int | None = None
+    target_pages: int | None = Field(default=None, ge=TARGET_PAGES_MIN, le=TARGET_PAGES_MAX)
 
 
 class QualificationItemUpdate(BaseModel):

@@ -29,6 +29,8 @@ function OutlineTreeEditor({
   onOpenBatchEdit,
   onSave,
   onRegenerateGuidance,
+  onUndoGuidance,
+  canUndoGuidance = false,
 }) {
   const numberLabels = useMemo(() => computeOutlineNumberLabels(nodes), [nodes]);
 
@@ -117,8 +119,10 @@ function OutlineTreeEditor({
             regeneratingLeaf={regeneratingLeaf}
             locked={locked}
             saving={saving}
+            canUndoGuidance={canUndoGuidance}
             onUpdateNode={onUpdateNode}
             onRegenerateGuidance={onRegenerateGuidance}
+            onUndoGuidance={onUndoGuidance}
             onSave={onSave}
           />
         </div>

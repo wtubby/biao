@@ -230,6 +230,7 @@ function GenerationPanel({
       message.warning('批量生成进行中，请稍后再单章生成');
       return;
     }
+    const hadContent = !!(leaves.find((n) => n.id === chapterId)?.generated_content || '').trim();
     setSingleGenerating((prev) => new Set(prev).add(chapterId));
     setSelectedId(chapterId);
     updateChapter(chapterId, { review_status: 'generating' });
@@ -245,7 +246,11 @@ function GenerationPanel({
         onHasGeneratedChapter?.(true);
       }
       await loadOutline();
-      message.success('章节生成完成');
+      message.success(
+        hadContent
+          ? '章节已重新生成；修改前版本已自动保存，可在「预览与导出 → 版本历史」中恢复'
+          : '章节生成完成',
+      );
     } catch (err) {
       updateChapter(chapterId, { review_status: 'red' });
       message.error(err.message);

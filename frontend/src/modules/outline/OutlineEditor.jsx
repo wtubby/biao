@@ -67,6 +67,7 @@ const OutlineEditor = forwardRef(function OutlineEditor({
   const [splittingLong, setSplittingLong] = useState(false);
   const [splitPreviewCount, setSplitPreviewCount] = useState(0);
   const [regeneratingLeaf, setRegeneratingLeaf] = useState(null);
+  const [guidanceUndoByLeaf, setGuidanceUndoByLeaf] = useState({});
   const autoFilledScoreRef = useRef(false);
   const statusSyncAttemptedRef = useRef(false);
   const outlineNodes = useMemo(() => normalizeOutlineNodes(nodes), [nodes]);
@@ -283,6 +284,7 @@ const OutlineEditor = forwardRef(function OutlineEditor({
       const outline = normalizeOutlineNodes(bundle);
       const persisted = Array.isArray(bundle?.warnings) ? bundle.warnings : [];
       setNodes(outline);
+      setGuidanceUndoByLeaf({});
       const warnings = [...new Set([...(result.warnings || []), ...(persisted || [])])];
       setOutlineWarnings(warnings);
       const leaves = outline.filter((n) => n.is_leaf === 1);
@@ -305,16 +307,45 @@ const OutlineEditor = forwardRef(function OutlineEditor({
     }
   };
 
+  const confirmAndGenerate = () => {
+    if (locked || generating) return;
+    if (!catalogCount) {
+      message.warning('请先完成定目录');
+      return;
+    }
+    // 首次生成无现有大纲，无需确认；重新生成会整树覆盖
+    if (!outlineNodes.length) {
+      handleGenerate();
+      return;
+    }
+    Modal.confirm({
+      title: '确认重新生成整个大纲？',
+      content: '将重新生成整个大纲结构和写作思路。当前所有手动编辑（标题、思路、评分项绑定、风格档位）都会丢失且不可恢复，确定继续吗？',
+      okText: '确认重新生成',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: () => handleGenerate(),
+    });
+  };
+
   const handleRegenerateLeafGuidance = async (leafId) => {
     if (!leafId || locked) return;
     setRegeneratingLeaf(leafId);
     try {
       const leaf = outlineNodes.find((n) => n.id === leafId);
+      const previous = {
+        guidance_brief: leaf?.guidance_brief || '',
+        content_boundary: leaf?.content_boundary || '',
+        writing_guidance: leaf?.writing_guidance || '',
+        style_tier: leaf?.style_tier || 'balanced',
+        target_words: leaf?.target_words,
+      };
       const result = await regenerateLeafGuidance(projectId, leafId, {
         styleTier: leaf?.style_tier || 'balanced',
       });
       const node = result?.node;
       if (node) {
+        setGuidanceUndoByLeaf((prev) => ({ ...prev, [leafId]: previous }));
         setNodes((prev) => normalizeOutlineNodes(prev).map((n) => (
           n.id === node.id
             ? {
@@ -327,13 +358,28 @@ const OutlineEditor = forwardRef(function OutlineEditor({
             }
             : n
         )));
-        message.success('已重新生成编写思路');
+        message.success('已重新生成编写思路，可点「撤销」恢复上一版');
       }
     } catch (e) {
       message.error(e.message);
     } finally {
       setRegeneratingLeaf(null);
     }
+  };
+
+  const handleUndoLeafGuidance = (leafId) => {
+    if (!leafId || locked) return;
+    const snapshot = guidanceUndoByLeaf[leafId];
+    if (!snapshot) return;
+    setNodes((prev) => normalizeOutlineNodes(prev).map((n) => (
+      n.id === leafId ? { ...n, ...snapshot } : n
+    )));
+    setGuidanceUndoByLeaf((prev) => {
+      const next = { ...prev };
+      delete next[leafId];
+      return next;
+    });
+    message.success('已恢复上一版编写思路（请记得保存）');
   };
 
   const handleSave = async () => {
@@ -381,6 +427,18 @@ const OutlineEditor = forwardRef(function OutlineEditor({
     }
   };
 
+  const confirmAndLock = () => {
+    if (!outlineNodes.length) { message.warning('请先生成大纲后再锁定'); return; }
+    if (locking) return;
+    Modal.confirm({
+      title: '确认编写正文？',
+      content: '锁定后将无法再修改大纲结构与编写思路，确认继续？',
+      okText: '确认锁定',
+      cancelText: '取消',
+      onOk: () => handleLock(),
+    });
+  };
+
   useImperativeHandle(ref, () => ({
     regenerateIdeas: async () => {
       if (locked) {
@@ -391,12 +449,12 @@ const OutlineEditor = forwardRef(function OutlineEditor({
         message.warning('请先完成定目录');
         return;
       }
-      await handleGenerate();
+      confirmAndGenerate();
     },
     writeBody: async () => {
-      await handleLock();
+      confirmAndLock();
     },
-  }), [locked, catalogCount, handleGenerate, handleLock]);
+  }), [locked, catalogCount, outlineNodes.length, locking, generating]);
 
   // 向工作区页脚同步大纲操作态
   useEffect(() => {
@@ -569,8 +627,9 @@ const OutlineEditor = forwardRef(function OutlineEditor({
   const moreMenuItems = [
     {
       key: 'regenerate',
-      label: step2Done ? '重新生成思路' : '生成编写思路',
+      label: step2Done ? '重新生成整个大纲' : '生成编写思路',
       disabled: !step1Done || locked || generating,
+      danger: step2Done,
     },
     {
       key: 'catalog',
@@ -594,7 +653,7 @@ const OutlineEditor = forwardRef(function OutlineEditor({
   ];
 
   const handleMoreMenuClick = ({ key }) => {
-    if (key === 'regenerate') handleGenerate();
+    if (key === 'regenerate') confirmAndGenerate();
     else if (key === 'catalog') goWizardStep(1);
     else if (key === 'validate') handleValidate();
     else if (key === 'split') handleSplitLongLeaves();
@@ -790,6 +849,8 @@ const OutlineEditor = forwardRef(function OutlineEditor({
                       onOpenBatchEdit={() => setBatchEditOpen(true)}
                       onSave={handleSave}
                       onRegenerateGuidance={handleRegenerateLeafGuidance}
+                      onUndoGuidance={handleUndoLeafGuidance}
+                      canUndoGuidance={!!(selectedLeaf && guidanceUndoByLeaf[selectedLeaf.id])}
                     />
                   ) : (
                     <div className="outline-review-empty">

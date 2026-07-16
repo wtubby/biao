@@ -110,10 +110,20 @@ function RequirementsTable({ projectId, onStatsChange, onLocateSource, activeLoc
     return rows;
   }, [data, statusFilter, searchText]);
 
+  const isRiskItem = (row) => row.is_risk_item === 1;
+  const isBatchConfirmable = (row) => (
+    row.status !== 'confirmed' && row.status !== 'ignored' && !isRiskItem(row)
+  );
+
   const confirmRows = async (rows) => {
-    const targets = rows.filter((r) => r.status !== 'confirmed');
+    const skippedRisk = rows.filter((r) => r.status !== 'confirmed' && isRiskItem(r)).length;
+    const targets = rows.filter(isBatchConfirmable);
     if (!targets.length) {
-      message.info('没有可确认的评分项');
+      if (skippedRisk) {
+        message.warning(`刚性风险项须逐条核对确认，已跳过 ${skippedRisk} 项`);
+      } else {
+        message.info('没有可批量确认的普通评分项');
+      }
       return;
     }
     setBatchConfirming(true);
@@ -124,7 +134,8 @@ function RequirementsTable({ projectId, onStatsChange, onLocateSource, activeLoc
     applyStats(next);
     try {
       await Promise.all(targets.map((r) => updateRequirement(r.id, { status: 'confirmed' })));
-      message.success(`已确认 ${targets.length} 项`);
+      const skipHint = skippedRisk ? `（已跳过 ${skippedRisk} 项刚性风险）` : '';
+      message.success(`已确认 ${targets.length} 项${skipHint}`);
       setSelectedRowKeys((prev) => prev.filter((id) => !targetIds.has(id)));
     } catch (e) {
       message.error(e.message);
@@ -319,7 +330,10 @@ function RequirementsTable({ projectId, onStatsChange, onLocateSource, activeLoc
     },
   ];
 
-  const pendingInFilter = filteredData.filter((r) => r.status !== 'confirmed' && r.status !== 'ignored').length;
+  const pendingInFilter = filteredData.filter(isBatchConfirmable).length;
+  const selectedConfirmableCount = data.filter(
+    (r) => selectedRowKeys.includes(r.id) && isBatchConfirmable(r),
+  ).length;
 
   return (
     <>
@@ -354,11 +368,11 @@ function RequirementsTable({ projectId, onStatsChange, onLocateSource, activeLoc
           <Radio.Button value="risk">刚性风险 ({data.filter((r) => r.is_risk_item === 1).length})</Radio.Button>
           <Radio.Button value="ignored">已忽略 ({data.filter((r) => r.status === 'ignored').length})</Radio.Button>
         </Radio.Group>
-        <Space>
+        <Space wrap>
           <Button
             size="small"
             type="primary"
-            disabled={!selectedRowKeys.length}
+            disabled={!selectedConfirmableCount}
             loading={batchConfirming}
             onClick={handleBatchConfirm}
           >
@@ -372,6 +386,9 @@ function RequirementsTable({ projectId, onStatsChange, onLocateSource, activeLoc
           >
             确认当前筛选 ({pendingInFilter})
           </Button>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            刚性风险项须逐条确认，不参与批量操作
+          </Text>
         </Space>
       </div>
       <Table
@@ -392,7 +409,7 @@ function RequirementsTable({ projectId, onStatsChange, onLocateSource, activeLoc
           selectedRowKeys,
           onChange: setSelectedRowKeys,
           getCheckboxProps: (record) => ({
-            disabled: record.status === 'confirmed',
+            disabled: record.status === 'confirmed' || record.is_risk_item === 1,
           }),
         }}
       />

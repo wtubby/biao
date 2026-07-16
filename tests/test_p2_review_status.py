@@ -52,26 +52,42 @@ def test_build_qa_user_prompt_segment_label():
     assert "片段正文" in prompt
 
 
+def test_build_qa_user_prompt_multi_windows_packs_once():
+    prompt = build_qa_user_prompt(
+        "",
+        {
+            "chapter_title": "施工方案",
+            "chapter_path": "方案 > 施工",
+            "requirements_text": "评分",
+            "retrieval_text": "",
+            "sibling_leaf_titles": [],
+            "other_leaf_titles": [],
+        },
+        windows=[("开头", "AAA"), ("中段", "BBB"), ("结尾", "CCC")],
+    )
+    assert "多窗口一次性质检" in prompt
+    assert "【窗口：开头】" in prompt
+    assert "【窗口：中段】" in prompt
+    assert "【窗口：结尾】" in prompt
+    assert prompt.count("评分项：") == 1
+
+
 def test_run_soft_qa_merges_segment_issues(monkeypatch):
     calls = {"n": 0}
 
-    def fake_once(content, bundle, *, segment_label=None):
+    def fake_multi(windows, bundle):
         calls["n"] += 1
-        if segment_label == "中段":
-            return {
-                "passed": False,
-                "coverage_issues": ["中段缺关键词"],
-                "faithfulness_issues": [],
-                "scope_issues": [],
-            }
+        assert len(windows) == 3
         return {
-            "passed": True,
-            "coverage_issues": [],
+            "passed": False,
+            "coverage_issues": ["[中段] 中段缺关键词"],
             "faithfulness_issues": [],
             "scope_issues": [],
+            "specificity_issues": [],
+            "segments_checked": 3,
         }
 
-    monkeypatch.setattr("services.chapter_qa_orchestrator._run_soft_qa_once", fake_once)
+    monkeypatch.setattr("services.chapter_qa_orchestrator._run_soft_qa_multi", fake_multi)
     monkeypatch.setattr(
         "services.chapter_qa_orchestrator.sample_content_windows_for_qa",
         lambda _c: [("开头", "a"), ("中段", "b"), ("结尾", "c")],
@@ -79,7 +95,25 @@ def test_run_soft_qa_merges_segment_issues(monkeypatch):
     result = run_soft_qa("x" * 9000, {"chapter_title": "t"})
     assert result["passed"] is False
     assert any("中段" in x for x in result["coverage_issues"])
-    assert calls["n"] == 3
+    assert calls["n"] == 1
+
+
+def test_merge_multi_window_soft_qa_prefixes_labels():
+    from services.chapter_qa_orchestrator import _merge_multi_window_soft_qa
+
+    merged = _merge_multi_window_soft_qa(
+        {
+            "segments": [
+                {"label": "开头", "passed": True, "coverage_issues": []},
+                {"label": "中段", "passed": False, "coverage_issues": ["缺关键词"]},
+                {"label": "结尾", "passed": True, "specificity_issues": []},
+            ],
+        },
+        window_count=3,
+    )
+    assert merged["passed"] is False
+    assert merged["segments_checked"] == 3
+    assert merged["coverage_issues"] == ["[中段] 缺关键词"]
 
 
 def test_matrix_issues_for_chapter_missing_keyword():
