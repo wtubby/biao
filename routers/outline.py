@@ -33,7 +33,13 @@ from services.outline_service import (
 )
 from services.outline_template_service import get_outline_template, list_outline_templates
 from services.project_meta import get_meta, get_outline_catalog_text, set_meta
-from services.project_status import ALLOW_OUTLINE_GENERATE, ALLOW_OUTLINE_LOCK, ALLOW_OUTLINE_SAVE, require_status
+from services.project_status import (
+    ALLOW_GENERATION_CONFIG_RESCALE,
+    ALLOW_OUTLINE_GENERATE,
+    ALLOW_OUTLINE_LOCK,
+    ALLOW_OUTLINE_SAVE,
+    require_status,
+)
 from services.word_estimate import estimate_from_leaves, format_word_count_display
 
 router = APIRouter(prefix="/api", tags=["outline"])
@@ -142,6 +148,8 @@ def update_generation_config_api(
         target_pages = updates.pop("target_pages", None)
         custom_total_words = updates.pop("custom_total_words", None)
         custom_word_count = updates.pop("custom_word_count", None)
+        # generating/done 允许改展示配置，但不重算 target_words，避免冲掉已生成正文
+        can_rescale = project.status in ALLOW_GENERATION_CONFIG_RESCALE
 
         if target_pages is not None:
             if target_pages < TARGET_PAGES_MIN or target_pages > TARGET_PAGES_MAX:
@@ -149,14 +157,15 @@ def update_generation_config_api(
                     f"目标页数须在 {TARGET_PAGES_MIN}~{TARGET_PAGES_MAX} 之间"
                 )
             set_meta(project, target_pages=int(target_pages))
-            reapply_outline_generation_mode(db, project)
+            if can_rescale:
+                reapply_outline_generation_mode(db, project)
 
         if updates:
             update_generation_config(project, **updates)
 
-        config = get_generation_config(project)
         if custom_word_count and custom_total_words and custom_total_words > 0:
-            scale_leaves_to_total_words(db, project, int(custom_total_words))
+            if can_rescale:
+                scale_leaves_to_total_words(db, project, int(custom_total_words))
             update_generation_config(
                 project,
                 custom_word_count=True,
@@ -164,7 +173,8 @@ def update_generation_config_api(
             )
         elif custom_word_count is False:
             update_generation_config(project, custom_word_count=False, custom_total_words=None)
-            reapply_outline_generation_mode(db, project)
+            if can_rescale:
+                reapply_outline_generation_mode(db, project)
 
         db.commit()
         return {"success": True, **_build_generation_payload(db, project)}

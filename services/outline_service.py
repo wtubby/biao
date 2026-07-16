@@ -925,7 +925,11 @@ def regenerate_leaf_guidance(
 
 
 def reapply_outline_generation_mode(db: Session, project: Project) -> int:
-    """切换档位后，按当前大纲结构重算各章目标字数。"""
+    """切换档位/篇幅后，按当前大纲结构重算各章目标字数。
+
+    只原地更新 writing_guidance，不走 save_outline_tree，避免 target_words
+    变化被判 stale 而清空已生成正文。
+    """
     rows = sort_outline_tree_dfs(
         db.query(TechOutline).filter(TechOutline.project_id == project.id).all()
     )
@@ -944,11 +948,31 @@ def reapply_outline_generation_mode(db: Session, project: Project) -> int:
     enriched = enrich_outline_nodes(
         nodes, req_dicts, target_pages, generation_mode=generation_mode,
     )
-    save_outline_tree(db, project.id, enriched)
+    enriched_by_id = {str(n.get("id")): n for n in enriched}
+    for row in rows:
+        if not row.is_leaf:
+            continue
+        node = enriched_by_id.get(row.id)
+        if not node:
+            continue
+        wg_raw = node.get("writing_guidance")
+        parsed = parse_writing_guidance(wg_raw if isinstance(wg_raw, str) else None)
+        boundary = str(node.get("content_boundary") or parsed["content_boundary"] or "").strip()
+        brief = str(node.get("guidance_brief") or parsed["brief"] or "").strip()
+        style_tier = normalize_style_tier(node.get("style_tier") or parsed.get("style_tier"))
+        row.writing_guidance = serialize_writing_guidance(
+            brief=brief,
+            content_boundary=boundary,
+            target_words=parsed["target_words"],
+            split_origin=bool(parsed.get("split_origin")),
+            style_tier=style_tier,
+        )
+    db.flush()
     return len(rows)
 
 
 def scale_leaves_to_total_words(db: Session, project: Project, total_words: int) -> int:
+    """按自定义总字数等比缩放叶子 target_words，保留已生成正文。"""
     rows = (
         db.query(TechOutline)
         .filter(TechOutline.project_id == project.id, TechOutline.is_leaf == 1)
@@ -957,29 +981,25 @@ def scale_leaves_to_total_words(db: Session, project: Project, total_words: int)
     if not rows or total_words <= 0:
         return 0
     current = 0
+    parsed_by_id: dict[str, dict] = {}
     for row in rows:
         parsed = parse_writing_guidance(row.writing_guidance)
+        parsed_by_id[row.id] = parsed
         current += int(parsed.get("target_words") or 0)
     if current <= 0:
         return 0
     ratio = total_words / current
-    all_rows = sort_outline_tree_dfs(
-        db.query(TechOutline).filter(TechOutline.project_id == project.id).all()
-    )
-    nodes = _outline_rows_to_enrich_nodes(all_rows)
-    for node in nodes:
-        if not node.get("is_leaf"):
-            continue
-        parsed = parse_writing_guidance(node.get("writing_guidance"))
+    for row in rows:
+        parsed = parsed_by_id[row.id]
         base = int(parsed.get("target_words") or 0)
         if base > 0:
             scaled = max(200, int(round(base * ratio)))
-            node["writing_guidance"] = serialize_writing_guidance(
+            row.writing_guidance = serialize_writing_guidance(
                 brief=parsed["brief"],
                 content_boundary=parsed["content_boundary"],
                 target_words=scaled,
                 split_origin=bool(parsed.get("split_origin")),
                 style_tier=parsed.get("style_tier"),
             )
-    save_outline_tree(db, project.id, nodes)
+    db.flush()
     return len(rows)

@@ -319,7 +319,7 @@ const OutlineEditor = forwardRef(function OutlineEditor({
           n.id === node.id
             ? {
               ...n,
-              ...node,
+              writing_guidance: node.writing_guidance ?? n.writing_guidance,
               guidance_brief: node.guidance_brief ?? n.guidance_brief,
               content_boundary: node.content_boundary ?? n.content_boundary,
               style_tier: node.style_tier || n.style_tier || 'balanced',
@@ -345,8 +345,10 @@ const OutlineEditor = forwardRef(function OutlineEditor({
       setNodes(outline);
       message.success('大纲已保存');
       setValidation(null);
+      return true;
     } catch (e) {
       message.error(e.message);
+      return false;
     } finally {
       setSaving(false);
     }
@@ -356,6 +358,13 @@ const OutlineEditor = forwardRef(function OutlineEditor({
     if (!outlineNodes.length) { message.warning('请先生成大纲后再锁定'); return; }
     setLocking(true);
     try {
+      // 锁定接口只认 DB 已持久化行；先保存本地未提交编辑，避免静默丢弃
+      const payload = serializeOutlineNodesForSave(outlineNodes);
+      await saveOutline(projectId, payload);
+      const outline = normalizeOutlineNodes(await fetchOutline(projectId));
+      setNodes(outline);
+      setValidation(null);
+
       const result = await lockOutline(projectId);
       message.success('大纲已锁定，正在进入内容生成');
       setLocked(true);

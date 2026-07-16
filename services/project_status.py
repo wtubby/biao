@@ -8,6 +8,8 @@ ALLOW_UPLOAD = frozenset({"draft", "confirming", "planning"})
 ALLOW_OUTLINE_GENERATE = frozenset({"planning"})
 ALLOW_OUTLINE_SAVE = frozenset({"planning"})
 ALLOW_OUTLINE_LOCK = frozenset({"planning"})
+# 篇幅/自定义字数触发的 target_words 重算：仅规划与锁定阶段；generating/done 只改展示配置
+ALLOW_GENERATION_CONFIG_RESCALE = frozenset({"planning", "outline_locked"})
 ALLOW_GENERATE = frozenset({"outline_locked", "generating", "done"})
 ALLOW_EXPORT = frozenset({"generating", "done", "outline_locked"})
 
