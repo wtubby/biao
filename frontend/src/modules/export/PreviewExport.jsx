@@ -423,10 +423,10 @@ function PreviewExport({ projectId, durationDays, onGoGenerate }) {
         message.error(e.message);
       }
     };
-    if (isDirty) {
+    if (content.trim()) {
       Modal.confirm({
-        title: '有未保存的修改',
-        content: '重新生成将覆盖当前编辑内容，是否继续？',
+        title: '确认重新生成',
+        content: '重新生成将覆盖当前章节正文，是否继续？',
         okText: '继续生成',
         cancelText: '取消',
         okButtonProps: { danger: true },
