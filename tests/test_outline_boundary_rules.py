@@ -17,6 +17,16 @@ def test_validate_goal_boundary_rejects_measures():
     assert any("禁止词" in i for i in issues)
 
 
+def test_validate_goal_boundary_allows_negated_forbidden():
+    """官方好例子「不写保证措施…」不得被误判为含禁止词。"""
+    issues = validate_content_boundary(
+        "项目质量目标",
+        "写质量、工期、造价三方面概括性目标承诺，与全局工期一致；"
+        "回应评分项中的目标要求；不写保证措施与工艺细节。",
+    )
+    assert not any("禁止词" in i for i in issues)
+
+
 def test_validate_overview_boundary_rejects_scheme():
     issues = validate_content_boundary(
         "工程概况",

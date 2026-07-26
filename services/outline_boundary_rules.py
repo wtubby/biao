@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from services.writing_guidance import (
     default_content_boundary_for_title,
     get_chapter_type,
@@ -19,6 +21,16 @@ _OVERVIEW_FORBIDDEN = _GOAL_FORBIDDEN + (
 )
 _CONSTRUCTION_HINTS = ("工序", "工艺", "控制", "要点", "参数", "质量", "安装", "调试", "验收", "措施")
 _SPECIAL_TITLE_MARKERS = ("安装", "敷设", "调试", "专项", "施工方案")
+_NEGATION_MARKERS = ("不写", "不得", "不含", "不涉及", "禁止", "勿", "不展开", "不做", "不出现")
+
+
+def _is_negated_mention(text: str, keyword: str) -> bool:
+    """粗判 keyword 前若干字内是否有否定词，避免把「不写XX」误判为写了 XX。"""
+    for m in re.finditer(re.escape(keyword), text):
+        window = text[max(0, m.start() - 6) : m.start()]
+        if any(neg in window for neg in _NEGATION_MARKERS):
+            return True
+    return False
 
 
 def validate_content_boundary(title: str, boundary: str) -> list[str]:
@@ -33,11 +45,11 @@ def validate_content_boundary(title: str, boundary: str) -> list[str]:
     chapter_type = get_chapter_type(title)
     if chapter_type == "goal":
         for kw in _GOAL_FORBIDDEN:
-            if kw in text:
+            if kw in text and not _is_negated_mention(text, kw):
                 issues.append(f"目标类章节 boundary 含禁止词「{kw}」")
     elif chapter_type == "overview":
         for kw in _OVERVIEW_FORBIDDEN:
-            if kw in text:
+            if kw in text and not _is_negated_mention(text, kw):
                 issues.append(f"概况类章节 boundary 含禁止词「{kw}」")
     elif any(marker in (title or "") for marker in _SPECIAL_TITLE_MARKERS):
         if not any(hint in text for hint in _CONSTRUCTION_HINTS):
