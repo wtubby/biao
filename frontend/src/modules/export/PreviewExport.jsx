@@ -346,7 +346,7 @@ function PreviewExport({ projectId, durationDays, onGoGenerate }) {
     }
     setDetectingAi(true);
     try {
-      const result = await detectAiCliches(selected, content);
+      const result = await detectAiCliches(projectId, selected, content);
       const hits = result.hits || [];
       setAiHits(hits);
       if (hits.length === 0) {
@@ -371,7 +371,7 @@ function PreviewExport({ projectId, durationDays, onGoGenerate }) {
 
   const handleSave = async () => {
     try {
-      await saveChapterContent(selected, content);
+      await saveChapterContent(projectId, selected, content);
       setSavedContent(content);
       message.success('已保存');
       await load({ silent: true });
@@ -388,10 +388,10 @@ function PreviewExport({ projectId, durationDays, onGoGenerate }) {
     setReviewing(true);
     try {
       if (isDirty) {
-        await saveChapterContent(selected, content);
+        await saveChapterContent(projectId, selected, content);
         setSavedContent(content);
       }
-      const result = await reviewChapter(selected);
+      const result = await reviewChapter(projectId, selected);
       const next = result.generated_content || content;
       setContent(next);
       setSavedContent(next);
@@ -412,7 +412,7 @@ function PreviewExport({ projectId, durationDays, onGoGenerate }) {
   const handleRegenerate = async () => {
     const run = async () => {
       try {
-        const result = await regenerateChapter(selected);
+        const result = await regenerateChapter(projectId, selected);
         const next = result.generated_content || '';
         setContent(next);
         setSavedContent(next);
@@ -459,7 +459,7 @@ function PreviewExport({ projectId, durationDays, onGoGenerate }) {
     }
     setRewriting(true);
     try {
-      const result = await selectionRewrite(selected, {
+      const result = await selectionRewrite(projectId, selected, {
         selected_text: selection.text,
         instruction: rewriteInstruction.trim(),
         context_before: content.substring(0, selection.start),
@@ -801,6 +801,7 @@ function PreviewExport({ projectId, durationDays, onGoGenerate }) {
       />
       <ChapterVersionDrawer
         open={versionOpen}
+        projectId={projectId}
         chapterId={selected}
         chapterTitle={selectedChapter?.title}
         onClose={() => setVersionOpen(false)}

@@ -54,7 +54,7 @@ def test_restore_chapter_version_replaces_content():
         chapter = _seed_chapter(db, "当前正文")
         archive_chapter_snapshot(db, chapter, "manual")
         db.commit()
-        versions = list_chapter_versions(db, chapter.id)
+        versions = list_chapter_versions(db, chapter.project_id, chapter.id)
         assert versions
         version_id = versions[0]["id"]
 
@@ -80,8 +80,8 @@ def test_restore_chapter_version_re_reviews_instead_of_copying_old_status():
         chapter = _seed_chapter(db, "旧版绿灯正文", review_status="green")
         archive_chapter_snapshot(db, chapter, "generate")
         db.commit()
-        version_id = list_chapter_versions(db, chapter.id)[0]["id"]
-        assert list_chapter_versions(db, chapter.id)[0]["review_status"] == "green"
+        version_id = list_chapter_versions(db, chapter.project_id, chapter.id)[0]["id"]
+        assert list_chapter_versions(db, chapter.project_id, chapter.id)[0]["review_status"] == "green"
 
         chapter.generated_content = "后来改过的正文"
         chapter.review_status = "yellow"
@@ -117,18 +117,85 @@ def test_compare_chapter_versions_with_current_content():
         chapter = _seed_chapter(db, "旧版本\n第二行")
         archive_chapter_snapshot(db, chapter, "manual")
         db.commit()
-        version_id = list_chapter_versions(db, chapter.id)[0]["id"]
+        version_id = list_chapter_versions(db, chapter.project_id, chapter.id)[0]["id"]
 
         chapter.generated_content = "新版本\n第二行"
         db.commit()
 
         result = compare_chapter_versions(
             db,
+            chapter.project_id,
             chapter.id,
             version_id,
             current_content=chapter.generated_content,
         )
         assert "旧版本" in result["diff"]
         assert "新版本" in result["diff"]
+    finally:
+        db.close()
+
+
+def test_version_queries_scoped_by_project_id():
+    """同 chapter_id 跨项目时，列表/清理不得串号。"""
+    from services.chapter_version_service import MAX_VERSIONS_PER_CHAPTER
+
+    init_db()
+    db = SessionLocal()
+    try:
+        shared_chapter_id = "ch-3"
+        a = _seed_chapter(db, "项目A正文")
+        a.id = shared_chapter_id
+        db.commit()
+
+        b_pid = str(uuid.uuid4())
+        db.add(Project(id=b_pid, name="项目B"))
+        b = TechOutline(
+            project_id=b_pid,
+            id=shared_chapter_id,
+            title="施工组织设计",
+            sort_order=1,
+            level=1,
+            is_leaf=1,
+            generated_content="项目B正文",
+            review_status="green",
+        )
+        db.add(b)
+        db.commit()
+
+        archive_chapter_snapshot(db, a, "manual")
+        archive_chapter_snapshot(db, b, "manual")
+        db.commit()
+
+        a_versions = list_chapter_versions(db, a.project_id, shared_chapter_id)
+        b_versions = list_chapter_versions(db, b.project_id, shared_chapter_id)
+        assert len(a_versions) == 1
+        assert len(b_versions) == 1
+        assert a_versions[0]["preview"].startswith("项目A")
+        assert b_versions[0]["preview"].startswith("项目B")
+
+        # 给 A 灌满超出上限的版本，清理不得删掉 B
+        for i in range(MAX_VERSIONS_PER_CHAPTER + 3):
+            a.generated_content = f"项目A正文-v{i}"
+            archive_chapter_snapshot(db, a, "manual")
+        db.commit()
+
+        assert (
+            db.query(ChapterVersion)
+            .filter(
+                ChapterVersion.project_id == a.project_id,
+                ChapterVersion.chapter_id == shared_chapter_id,
+            )
+            .count()
+            == MAX_VERSIONS_PER_CHAPTER
+        )
+        assert (
+            db.query(ChapterVersion)
+            .filter(
+                ChapterVersion.project_id == b.project_id,
+                ChapterVersion.chapter_id == shared_chapter_id,
+            )
+            .count()
+            == 1
+        )
     finally:
         db.close()

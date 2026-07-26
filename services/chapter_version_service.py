@@ -19,6 +19,9 @@ _SOURCE_LABELS = {
     "restore": "版本恢复",
 }
 
+# ChapterVersion 必须按 (project_id, chapter_id) 作用域查询；
+# TechOutline.id 仅项目内唯一，漏掉 project_id 会跨项目串读/误删。
+
 
 def archive_chapter_snapshot(db: Session, chapter: TechOutline, source: str) -> ChapterVersion | None:
     """在覆盖章节正文前，将当前内容存档。"""
@@ -28,7 +31,10 @@ def archive_chapter_snapshot(db: Session, chapter: TechOutline, source: str) -> 
 
     latest = (
         db.query(ChapterVersion)
-        .filter(ChapterVersion.chapter_id == chapter.id)
+        .filter(
+            ChapterVersion.project_id == chapter.project_id,
+            ChapterVersion.chapter_id == chapter.id,
+        )
         .order_by(ChapterVersion.created_at.desc())
         .first()
     )
@@ -45,14 +51,17 @@ def archive_chapter_snapshot(db: Session, chapter: TechOutline, source: str) -> 
     )
     db.add(version)
     db.flush()
-    _prune_old_versions(db, chapter.id)
+    _prune_old_versions(db, chapter.project_id, chapter.id)
     return version
 
 
-def list_chapter_versions(db: Session, chapter_id: str) -> list[dict]:
+def list_chapter_versions(db: Session, project_id: str, chapter_id: str) -> list[dict]:
     rows = (
         db.query(ChapterVersion)
-        .filter(ChapterVersion.chapter_id == chapter_id)
+        .filter(
+            ChapterVersion.project_id == project_id,
+            ChapterVersion.chapter_id == chapter_id,
+        )
         .order_by(ChapterVersion.created_at.desc())
         .limit(MAX_VERSIONS_PER_CHAPTER)
         .all()
@@ -72,27 +81,34 @@ def list_chapter_versions(db: Session, chapter_id: str) -> list[dict]:
     ]
 
 
-def get_chapter_version(db: Session, chapter_id: str, version_id: str) -> ChapterVersion | None:
+def get_chapter_version(
+    db: Session, project_id: str, chapter_id: str, version_id: str
+) -> ChapterVersion | None:
     return (
         db.query(ChapterVersion)
-        .filter(ChapterVersion.chapter_id == chapter_id, ChapterVersion.id == version_id)
+        .filter(
+            ChapterVersion.project_id == project_id,
+            ChapterVersion.chapter_id == chapter_id,
+            ChapterVersion.id == version_id,
+        )
         .first()
     )
 
 
 def compare_chapter_versions(
     db: Session,
+    project_id: str,
     chapter_id: str,
     from_version_id: str,
     to_version_id: str | None = None,
     current_content: str | None = None,
 ) -> dict:
-    left = get_chapter_version(db, chapter_id, from_version_id)
+    left = get_chapter_version(db, project_id, chapter_id, from_version_id)
     if not left:
         raise ValueError("左侧版本不存在")
 
     if to_version_id:
-        right = get_chapter_version(db, chapter_id, to_version_id)
+        right = get_chapter_version(db, project_id, chapter_id, to_version_id)
         if not right:
             raise ValueError("右侧版本不存在")
         right_content = right.content
@@ -127,7 +143,7 @@ def restore_chapter_version(db: Session, chapter: TechOutline, version_id: str) 
     # 惰性导入：避免与 writer_service → archive_chapter_snapshot 循环依赖
     from services.writer_service import review_chapter_content
 
-    version = get_chapter_version(db, chapter.id, version_id)
+    version = get_chapter_version(db, chapter.project_id, chapter.id, version_id)
     if not version:
         raise ValueError("版本不存在")
     archive_chapter_snapshot(db, chapter, "restore")
@@ -143,10 +159,14 @@ def restore_chapter_version(db: Session, chapter: TechOutline, version_id: str) 
 
     return review_chapter_content(db, project, chapter)
 
-def _prune_old_versions(db: Session, chapter_id: str) -> None:
+
+def _prune_old_versions(db: Session, project_id: str, chapter_id: str) -> None:
     rows = (
         db.query(ChapterVersion)
-        .filter(ChapterVersion.chapter_id == chapter_id)
+        .filter(
+            ChapterVersion.project_id == project_id,
+            ChapterVersion.chapter_id == chapter_id,
+        )
         .order_by(ChapterVersion.created_at.desc())
         .all()
     )

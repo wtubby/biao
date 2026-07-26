@@ -309,6 +309,6 @@ def test_regenerate_chapter_router_rejects_when_batch_generating():
     db = _db_for_single_chapter(project, chapter)
 
     with pytest.raises(HTTPException) as exc:
-        regenerate_chapter(chapter.id, db)
+        regenerate_chapter(project.id, chapter.id, db)
 
     assert exc.value.status_code == 409

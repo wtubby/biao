@@ -19,6 +19,7 @@ function formatVersionTime(value) {
 
 export function ChapterVersionDrawer({
   open,
+  projectId,
   chapterId,
   chapterTitle,
   onClose,
@@ -33,10 +34,10 @@ export function ChapterVersionDrawer({
   const [restoring, setRestoring] = useState('');
 
   const loadVersions = useCallback(async () => {
-    if (!chapterId) return;
+    if (!projectId || !chapterId) return;
     setLoading(true);
     try {
-      const data = await fetchChapterVersions(chapterId);
+      const data = await fetchChapterVersions(projectId, chapterId);
       const items = data.versions || [];
       setVersions(items);
       if (items.length > 0) {
@@ -51,7 +52,7 @@ export function ChapterVersionDrawer({
     } finally {
       setLoading(false);
     }
-  }, [chapterId]);
+  }, [projectId, chapterId]);
 
   useEffect(() => {
     if (open) loadVersions();
@@ -61,7 +62,7 @@ export function ChapterVersionDrawer({
     if (!compareFrom) return;
     setComparing(true);
     try {
-      const data = await compareChapterVersions(chapterId, compareFrom, compareTo || null);
+      const data = await compareChapterVersions(projectId, chapterId, compareFrom, compareTo || null);
       setDiffText(data.diff || '（无差异）');
     } catch (e) {
       message.error(e.message);
@@ -73,7 +74,7 @@ export function ChapterVersionDrawer({
   const handleRestore = async (versionId) => {
     setRestoring(versionId);
     try {
-      const result = await restoreChapterVersion(chapterId, versionId);
+      const result = await restoreChapterVersion(projectId, chapterId, versionId);
       message.success('已恢复到选定版本');
       onRestored?.(result);
       await loadVersions();

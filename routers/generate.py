@@ -29,6 +29,9 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["generate"])
 
+# TechOutline 主键是复合主键 (project_id, id)；id 仅在项目内唯一。
+# 任何 TechOutline 查询必须同时带 project_id，禁止只用 TechOutline.id == chapter_id。
+
 
 class ChapterUpdate(BaseModel):
     generated_content: str | None = None
@@ -46,6 +49,17 @@ class SelectionRewriteRequest(BaseModel):
 
 class DetectAiClichesRequest(BaseModel):
     content: str | None = None
+
+
+def _get_chapter(db: Session, project_id: str, chapter_id: str) -> TechOutline:
+    ch = (
+        db.query(TechOutline)
+        .filter(TechOutline.project_id == project_id, TechOutline.id == chapter_id)
+        .first()
+    )
+    if not ch:
+        raise HTTPException(404, "章节不存在")
+    return ch
 
 
 def _generation_job_key(project_id: str) -> str:
@@ -192,11 +206,11 @@ async def stream_progress(project_id: str):
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
-@router.put("/chapters/{chapter_id}")
-def update_chapter(chapter_id: str, body: ChapterUpdate, db: Session = Depends(get_db)):
-    ch = db.query(TechOutline).filter(TechOutline.id == chapter_id).first()
-    if not ch:
-        raise HTTPException(404, "章节不存在")
+@router.put("/projects/{project_id}/chapters/{chapter_id}")
+def update_chapter(
+    project_id: str, chapter_id: str, body: ChapterUpdate, db: Session = Depends(get_db)
+):
+    ch = _get_chapter(db, project_id, chapter_id)
     if body.generated_content is not None:
         archive_chapter_snapshot(db, ch, "manual")
         ch.generated_content = body.generated_content
@@ -220,12 +234,10 @@ def generate_chapter(project_id: str, chapter_id: str, db: Session = Depends(get
     }
 
 
-@router.post("/chapters/{chapter_id}/regenerate")
-def regenerate_chapter(chapter_id: str, db: Session = Depends(get_db)):
-    ch = db.query(TechOutline).filter(TechOutline.id == chapter_id).first()
-    if not ch:
-        raise HTTPException(404, "章节不存在")
-    chapter = generate_single_chapter(db, ch.project_id, chapter_id)
+@router.post("/projects/{project_id}/chapters/{chapter_id}/regenerate")
+def regenerate_chapter(project_id: str, chapter_id: str, db: Session = Depends(get_db)):
+    _get_chapter(db, project_id, chapter_id)
+    chapter = generate_single_chapter(db, project_id, chapter_id)
     return {
         "success": True,
         "review_status": chapter.review_status,
@@ -233,13 +245,16 @@ def regenerate_chapter(chapter_id: str, db: Session = Depends(get_db)):
     }
 
 
-@router.post("/chapters/{chapter_id}/selection-rewrite")
-def selection_rewrite_chapter(chapter_id: str, body: SelectionRewriteRequest, db: Session = Depends(get_db)):
-    ch = db.query(TechOutline).filter(TechOutline.id == chapter_id).first()
-    if not ch:
-        raise HTTPException(404, "章节不存在")
+@router.post("/projects/{project_id}/chapters/{chapter_id}/selection-rewrite")
+def selection_rewrite_chapter(
+    project_id: str,
+    chapter_id: str,
+    body: SelectionRewriteRequest,
+    db: Session = Depends(get_db),
+):
+    ch = _get_chapter(db, project_id, chapter_id)
 
-    project = db.query(Project).filter(Project.id == ch.project_id).first()
+    project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
         raise HTTPException(404, "项目不存在")
 
@@ -259,7 +274,7 @@ def selection_rewrite_chapter(chapter_id: str, body: SelectionRewriteRequest, db
         raise
     except Exception as exc:
         logger.exception(
-            "选区改写失败 project=%s chapter=%s: %s", ch.project_id, chapter_id, exc
+            "选区改写失败 project=%s chapter=%s: %s", project_id, chapter_id, exc
         )
         raise HTTPException(500, f"选区改写失败: {exc}") from exc
 
@@ -273,18 +288,16 @@ def selection_rewrite_chapter(chapter_id: str, body: SelectionRewriteRequest, db
     }
 
 
-@router.post("/chapters/{chapter_id}/review")
-def review_chapter(chapter_id: str, db: Session = Depends(get_db)):
+@router.post("/projects/{project_id}/chapters/{chapter_id}/review")
+def review_chapter(project_id: str, chapter_id: str, db: Session = Depends(get_db)):
     """对章节已有正文重新执行质检（人工修订后验章放行）。"""
-    ch = db.query(TechOutline).filter(TechOutline.id == chapter_id).first()
-    if not ch:
-        raise HTTPException(404, "章节不存在")
+    ch = _get_chapter(db, project_id, chapter_id)
     if ch.is_leaf != 1:
         raise HTTPException(400, "仅支持对叶子章节验章")
     if not (ch.generated_content or "").strip():
         raise HTTPException(400, "章节正文为空，无法验章")
 
-    project = db.query(Project).filter(Project.id == ch.project_id).first()
+    project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
         raise HTTPException(404, "项目不存在")
 
@@ -297,41 +310,38 @@ def review_chapter(chapter_id: str, db: Session = Depends(get_db)):
     }
 
 
-@router.post("/chapters/{chapter_id}/detect-ai-cliches")
+@router.post("/projects/{project_id}/chapters/{chapter_id}/detect-ai-cliches")
 def detect_chapter_ai_cliches(
+    project_id: str,
     chapter_id: str,
     body: DetectAiClichesRequest | None = None,
     db: Session = Depends(get_db),
 ):
-    ch = db.query(TechOutline).filter(TechOutline.id == chapter_id).first()
-    if not ch:
-        raise HTTPException(404, "章节不存在")
+    ch = _get_chapter(db, project_id, chapter_id)
     content = (body.content if body and body.content is not None else ch.generated_content) or ""
     hits = detect_ai_cliches(content)
     return {"count": len(hits), "hits": hits}
 
 
-@router.get("/chapters/{chapter_id}/versions")
-def get_chapter_versions(chapter_id: str, db: Session = Depends(get_db)):
-    ch = db.query(TechOutline).filter(TechOutline.id == chapter_id).first()
-    if not ch:
-        raise HTTPException(404, "章节不存在")
-    return {"versions": list_chapter_versions(db, chapter_id)}
+@router.get("/projects/{project_id}/chapters/{chapter_id}/versions")
+def get_chapter_versions(project_id: str, chapter_id: str, db: Session = Depends(get_db)):
+    _get_chapter(db, project_id, chapter_id)
+    return {"versions": list_chapter_versions(db, project_id, chapter_id)}
 
 
-@router.get("/chapters/{chapter_id}/versions/compare")
+@router.get("/projects/{project_id}/chapters/{chapter_id}/versions/compare")
 def compare_versions(
+    project_id: str,
     chapter_id: str,
     from_version_id: str,
     to_version_id: str | None = None,
     db: Session = Depends(get_db),
 ):
-    ch = db.query(TechOutline).filter(TechOutline.id == chapter_id).first()
-    if not ch:
-        raise HTTPException(404, "章节不存在")
+    ch = _get_chapter(db, project_id, chapter_id)
     try:
         return compare_chapter_versions(
             db,
+            project_id,
             chapter_id,
             from_version_id,
             to_version_id=to_version_id,
@@ -341,11 +351,11 @@ def compare_versions(
         raise HTTPException(404, str(exc)) from exc
 
 
-@router.post("/chapters/{chapter_id}/versions/{version_id}/restore")
-def restore_version(chapter_id: str, version_id: str, db: Session = Depends(get_db)):
-    ch = db.query(TechOutline).filter(TechOutline.id == chapter_id).first()
-    if not ch:
-        raise HTTPException(404, "章节不存在")
+@router.post("/projects/{project_id}/chapters/{chapter_id}/versions/{version_id}/restore")
+def restore_version(
+    project_id: str, chapter_id: str, version_id: str, db: Session = Depends(get_db)
+):
+    ch = _get_chapter(db, project_id, chapter_id)
     if ch.is_leaf != 1:
         raise HTTPException(400, "仅支持恢复叶子章节版本")
     try:

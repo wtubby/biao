@@ -5,7 +5,7 @@ logger = logging.getLogger(__name__)
 
 from sqlalchemy.orm import Session
 
-from db.models import Project, TechOutline, TechRequirement
+from db.models import Project, TechOutline, TechRequirement, _uuid
 from domains.registry import DEFAULT_DOMAIN, resolve_domain
 from llm.llm_client import call_llm_json
 from prompts.outline_prompt import (
@@ -641,7 +641,8 @@ def save_outline_tree(db: Session, project_id: str, nodes: list[dict]) -> list[T
     outlines: list[TechOutline] = []
     for i, node in enumerate(nodes):
         req_ids = node.get("requirement_ids") or []
-        node_id = str(node.get("id") or f"ch-{i + 1}")
+        # id 仅项目内唯一；fallback 必须用全局 UUID，禁止 ch-1/ch-2 这类跨项目必撞序号
+        node_id = str(node.get("id") or _uuid())
         old = existing.get(node_id)
         writing_guidance = None
         if node.get("is_leaf"):
