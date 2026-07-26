@@ -13,11 +13,7 @@ from config import (
 )
 from db.models import GlobalFact, Project, TechOutline, TechRequirement
 from domains.registry import DEFAULT_DOMAIN
-from prompts.writer_prompt import (
-    build_key_chapter_init_prompt,
-    compact_writing_guide,
-    get_writer_system_prompt,
-)
+from prompts.writer_prompt import compact_writing_guide
 from services.blind_bid_service import blind_bid_writer_constraints, is_blind_bid
 from services.generation_config import (
     build_generation_hints,
@@ -435,33 +431,5 @@ def _enrich_retrieval_with_plan(
             chapter.title,
             len(merged),
         )
-
-
-def _init_key_chapter_messages(
-    db: Session,
-    project: Project,
-    requirements: list[TechRequirement],
-    all_nodes: list[TechOutline],
-) -> list[dict]:
-    meta = get_meta(project)
-    domain = meta.get("engineering_domain") or DEFAULT_DOMAIN
-    overview = (meta.get("extra_notes") or "").strip() or None
-    all_reqs = (
-        db.query(TechRequirement)
-        .filter(TechRequirement.project_id == project.id, TechRequirement.status == "confirmed")
-        .all()
-    )
-    outline_titles = [n.title for n in all_nodes]
-    init_prompt = build_key_chapter_init_prompt(
-        project, all_reqs or requirements, outline_titles, domain, overview=overview,
-    )
-    return [
-        {"role": "system", "content": get_writer_system_prompt(domain)},
-        {"role": "user", "content": init_prompt},
-        {
-            "role": "assistant",
-            "content": f"已理解项目背景、评分项与大纲结构，将按{domain}技术标规范逐章撰写。",
-        },
-    ]
 
 

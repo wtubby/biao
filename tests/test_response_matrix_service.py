@@ -105,10 +105,47 @@ def test_format_chapter_matrix_context_lists_peers_and_summaries():
         db.commit()
 
         text = format_chapter_matrix_context(current, [req], [current, peer])
-        assert "本章评分响应矩阵" in text
+        assert "评分项分工提醒" in text
+        assert "同项还绑定" in text
         assert "施工准备" in text
         assert "临设布置" in text
-        assert "三级网络计划" in text
+        assert "三级网络计划" not in text
+        assert "15分" not in text
+    finally:
+        db.close()
+
+
+def test_format_chapter_matrix_context_skips_when_no_peer_bindings():
+    init_db()
+    db = SessionLocal()
+    try:
+        pid = str(uuid.uuid4())
+        project = Project(id=pid, name="无共享绑定测试", status="done")
+        db.add(project)
+
+        req = TechRequirement(
+            id=str(uuid.uuid4()),
+            project_id=pid,
+            requirement_title="施工组织设计",
+            score_value=15,
+            mandatory_elements="三级网络计划",
+            status="confirmed",
+        )
+        db.add(req)
+
+        current = TechOutline(
+            project_id=pid,
+            id=str(uuid.uuid4()),
+            title="施工部署",
+            sort_order=1,
+            level=2,
+            is_leaf=1,
+            requirement_ids=json.dumps([req.id]),
+        )
+        db.add(current)
+        db.commit()
+
+        assert format_chapter_matrix_context(current, [req], [current]) == ""
     finally:
         db.close()
 

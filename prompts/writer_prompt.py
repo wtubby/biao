@@ -190,7 +190,7 @@ def _writer_chapter_task_body(bundle: dict) -> str:
     req_hint = (bundle.get("requirements_hint") or "").strip()
     req_hint_block = f"\n\n{req_hint}" if req_hint else ""
     matrix_context = (bundle.get("matrix_context") or "").strip()
-    matrix_block = f"\n\n## 本章评分响应矩阵\n{matrix_context}\n" if matrix_context else ""
+    matrix_block = f"\n\n{matrix_context}\n" if matrix_context else ""
     evaluation_focus = (bundle.get("evaluation_focus") or "").strip()
     focus_block = f"\n\n{evaluation_focus}\n" if evaluation_focus else ""
 
@@ -314,15 +314,22 @@ def build_writer_user_messages(
     bundle: dict,
     *,
     fix_instructions: str | None = None,
+    include_project_context: bool = True,
 ) -> list[str]:
-    """分层 user 消息：稳定上下文前置，本章任务置末（利于 Prompt Cache 前缀命中）。"""
+    """分层 user 消息：稳定上下文前置，本章任务置末（利于 Prompt Cache 前缀命中）。
+
+    include_project_context=False 用于关键章节多轮续写：全局工程信息已在首轮
+   （或既有 chat 历史）注入，后续轮次只追加衔接/检索/本章任务，避免重复破坏前缀缓存。
+    """
     messages: list[str] = []
-    for part in (
-        _writer_project_context(bundle),
+    parts = (
+        (_writer_project_context(bundle),) if include_project_context else ()
+    ) + (
         _writer_continuity_context(bundle),
         _writer_retrieval_context(bundle),
         _writer_chapter_task_body(bundle),
-    ):
+    )
+    for part in parts:
         text = (part or "").strip()
         if text:
             messages.append(text)
@@ -336,6 +343,7 @@ def build_writer_chat_messages(
     *,
     fix_instructions: str | None = None,
     include_system: bool = True,
+    include_project_context: bool = True,
     structured: bool | None = None,
 ) -> list[dict[str, str]]:
     domain = bundle.get("engineering_domain") or DEFAULT_DOMAIN
@@ -345,7 +353,11 @@ def build_writer_chat_messages(
             "role": "system",
             "content": get_writer_system_prompt(domain, structured=structured),
         })
-    for part in build_writer_user_messages(bundle, fix_instructions=fix_instructions):
+    for part in build_writer_user_messages(
+        bundle,
+        fix_instructions=fix_instructions,
+        include_project_context=include_project_context,
+    ):
         messages.append({"role": "user", "content": part})
     return messages
 
@@ -359,39 +371,6 @@ def build_writer_user_prompt(
     return _WRITER_MESSAGE_JOIN.join(
         build_writer_user_messages(bundle, fix_instructions=fix_instructions)
     )
-
-
-def build_key_chapter_init_prompt(
-    project, requirements: list, outline_titles: list[str], domain: str | None = None,
-    overview: str | None = None,
-) -> str:
-    spec = resolve_domain(domain)
-    domain_label = spec.label
-    req_lines = "\n".join(f"- {r.requirement_title}" for r in requirements) if requirements else "（无）"
-    titles = "\n".join(f"- {t}" for t in outline_titles) if outline_titles else "（无）"
-
-    voltage_line = ""
-    if spec.key == DEFAULT_DOMAIN:
-        voltage_line = f"电压等级：{getattr(project, 'voltage_level', '未填')}\n"
-
-    overview_block = ""
-    if (overview or "").strip():
-        overview_block = f"\n项目概况：\n{overview.strip()}\n"
-
-    return f"""请记住以下{domain_label}技术标项目背景，后续将逐章请你撰写正文。
-
-工程名称：{getattr(project, 'name', '未填')}
-{voltage_line}工程规模：{getattr(project, 'capacity', '未填')}
-总工期：{getattr(project, 'duration_days', '未填')} 日历天
-建设地点：{getattr(project, 'location', '未填')}
-{overview_block}
-评分项：
-{req_lines}
-
-大纲结构：
-{titles}
-
-请确认已理解。后续每次只撰写指定的一章正文，不得提前撰写或穿插其他章节内容。"""
 
 
 SUMMARY_SYSTEM_PROMPT = (

@@ -19,7 +19,6 @@ from prompts.writer_prompt import (
     SUMMARY_SYSTEM_PROMPT,
     build_writer_chat_messages,
     build_writer_user_messages,
-    get_writer_system_prompt,
     sample_content_for_summary,
 )
 from services.qa_rules import (
@@ -128,7 +127,6 @@ def _generate_once(
 ) -> tuple[str, list[dict] | None]:
     if structured is None:
         structured = WRITER_STRUCTURED_OUTPUT
-    domain = bundle.get("engineering_domain")
 
     if structured:
         return _generate_once_structured(
@@ -140,9 +138,12 @@ def _generate_once(
         )
 
     if use_chat:
-        messages = list(chat_messages or [])
-        for part in build_writer_user_messages(bundle, fix_instructions=fix_instructions):
-            messages.append({"role": "user", "content": part})
+        messages = _append_writer_chat_turn(
+            bundle,
+            chat_messages=chat_messages,
+            fix_instructions=fix_instructions,
+            structured=False,
+        )
         content = call_llm_text(messages, max_tokens=max_tokens, role="writer")
         messages.append({"role": "assistant", "content": content})
         return content, messages
@@ -154,6 +155,31 @@ def _generate_once(
     return content, chat_messages
 
 
+def _append_writer_chat_turn(
+    bundle: dict,
+    *,
+    chat_messages: list[dict] | None,
+    fix_instructions: str | None,
+    structured: bool,
+) -> list[dict]:
+    """关键章节多轮：首轮与普通章节同构（system + 稳定前缀）；续轮只追加非项目块。"""
+    is_first_turn = not chat_messages
+    if is_first_turn:
+        return build_writer_chat_messages(
+            bundle,
+            fix_instructions=fix_instructions,
+            structured=structured,
+        )
+    messages = list(chat_messages)
+    for part in build_writer_user_messages(
+        bundle,
+        fix_instructions=fix_instructions,
+        include_project_context=False,
+    ):
+        messages.append({"role": "user", "content": part})
+    return messages
+
+
 def _generate_once_structured(
     bundle: dict,
     *,
@@ -163,16 +189,13 @@ def _generate_once_structured(
     fix_instructions: str | None = None,
 ) -> tuple[str, list[dict] | None]:
     """结构化 JSON 输出，组装为带图表占位符的正文。"""
-    domain = bundle.get("engineering_domain")
     if use_chat:
-        messages = list(chat_messages or [])
-        if not messages or messages[0].get("role") != "system":
-            messages.insert(
-                0,
-                {"role": "system", "content": get_writer_system_prompt(domain, structured=True)},
-            )
-        for part in build_writer_user_messages(bundle, fix_instructions=fix_instructions):
-            messages.append({"role": "user", "content": part})
+        messages = _append_writer_chat_turn(
+            bundle,
+            chat_messages=chat_messages,
+            fix_instructions=fix_instructions,
+            structured=True,
+        )
         try:
             raw = call_llm_json(
                 messages, max_tokens=max_tokens, role="writer", schema=WriterOutputSchema,

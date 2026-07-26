@@ -85,7 +85,7 @@ def format_chapter_matrix_context(
     requirements: list[TechRequirement],
     all_nodes: list[TechOutline],
 ) -> str:
-    """生成前注入：本章评分项分工与兄弟章已写摘要，防重复与漏项。"""
+    """生成前注入：仅输出「同项还绑定」增量（完整评分项见 requirements_text）。"""
     if not requirements:
         return ""
 
@@ -98,25 +98,18 @@ def format_chapter_matrix_context(
             if req_id in req_ids:
                 peers_by_req.setdefault(req_id, []).append(node)
 
-    lines = ["【本章评分响应矩阵】"]
+    lines: list[str] = []
     for req in requirements:
-        score = float(req.score_value or 0)
-        score_part = f"（{score:g}分）" if score > 0 else ""
-        risk_part = " [刚性]" if int(req.is_risk_item or 0) == 1 else ""
-        mandatory = (req.mandatory_elements or "").strip()
-        mandatory_part = f"；必备要素：{mandatory}" if mandatory else ""
-
         peers = [ch for ch in peers_by_req.get(req.id, []) if ch.id != chapter.id]
         peer_titles = [ch.title for ch in peers if ch.title]
-        if peer_titles:
-            peer_part = f"；同项还绑定：{'、'.join(peer_titles[:6])}"
-            if len(peer_titles) > 6:
-                peer_part += f" 等共 {len(peer_titles)} 章"
-        else:
-            peer_part = "；同项仅绑定本章"
+        if not peer_titles:
+            continue
 
         title = req.requirement_title or req.id
-        lines.append(f"- 「{title}」{score_part}{risk_part}{mandatory_part}{peer_part}")
+        peer_part = f"同项还绑定：{'、'.join(peer_titles[:6])}"
+        if len(peer_titles) > 6:
+            peer_part += f" 等共 {len(peer_titles)} 章"
+        lines.append(f"- 「{title}」{peer_part}")
 
         peer_notes: list[str] = []
         for ch in peers:
@@ -130,7 +123,9 @@ def format_chapter_matrix_context(
         for note in peer_notes[:3]:
             lines.append(f"  · {note}")
 
-    return "\n".join(lines)
+    if not lines:
+        return ""
+    return "【评分项分工提醒】\n" + "\n".join(lines)
 
 
 def matrix_issues_for_chapter(

@@ -110,7 +110,7 @@ def _plan_chapter_task_body(bundle: dict) -> str:
     req_hint = (bundle.get("requirements_hint") or "").strip()
     req_hint_block = f"\n\n{req_hint}" if req_hint else ""
     matrix_context = (bundle.get("matrix_context") or "").strip()
-    matrix_block = f"\n\n## 本章评分响应矩阵\n{matrix_context}\n" if matrix_context else ""
+    matrix_block = f"\n\n{matrix_context}\n" if matrix_context else ""
     evaluation_focus = (bundle.get("evaluation_focus") or "").strip()
     focus_block = f"\n\n{evaluation_focus}\n" if evaluation_focus else ""
 

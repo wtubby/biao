@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import itertools
 import re
 from typing import Any
 
@@ -94,10 +95,15 @@ def humanize_content(text: str, *, deep: bool = False) -> str:
     for word, alts in _VARIATION_WORDS.items():
         count = result.count(word)
         if count > 4:
-            for i, alt in enumerate(alts):
-                if i >= count - 3:
-                    break
-                result = result.replace(word, alt, 1)
+            cycle = itertools.cycle(alts)
+            # 保留前 3 次原词不动（维持术语稳定性），其余全部轮换替换
+            keep = 3
+            parts = result.split(word)
+            rebuilt = parts[0]
+            for idx, tail in enumerate(parts[1:], start=1):
+                filler = word if idx <= keep else next(cycle)
+                rebuilt += filler + tail
+            result = rebuilt
 
     result = _split_long_sentences(result)
     result = normalize_ai_spacing(result)

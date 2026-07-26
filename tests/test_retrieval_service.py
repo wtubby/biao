@@ -10,9 +10,26 @@ from services.retrieval_service import (
     DEFAULT_KNOWLEDGE_DOMAIN,
     _rrf_merge,
     build_retrieval_warning,
+    expand_tokens,
     has_knowledge_sources,
     retrieve_detailed,
 )
+
+
+def test_expand_tokens_does_not_pollute_with_weida_on_generic_gongcheng():
+    """「工程」不得因子串命中「危大工程」而污染检索 query。"""
+    expanded = expand_tokens(["工程", "概况"])
+    assert "危大工程" not in expanded
+    assert "危险性较大分部分项" not in expanded
+    assert "专项施工方案" not in expanded
+    assert "工程" in expanded
+    assert "概况" in expanded
+
+
+def test_expand_tokens_still_expands_exact_weida():
+    expanded = expand_tokens(["危大工程"])
+    assert "危险性较大分部分项" in expanded
+    assert "专项施工方案" in expanded
 
 
 def _topic_embedder(texts: list[str]) -> np.ndarray:

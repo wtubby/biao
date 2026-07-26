@@ -95,7 +95,7 @@ def build_chapter_evaluation_focus(
     requirements: list[TechRequirement],
     global_params: dict | None = None,
 ) -> str:
-    """规则生成「本章评标关注点」，供 plan/writer 对齐高分响应。"""
+    """规则生成「本章评标关注点」：仅优先级/锚点增量（完整字段见 requirements_text）。"""
     from services.writing_guidance import get_chapter_type, is_descriptive_chapter
 
     if is_descriptive_chapter(chapter_title) or not requirements:
@@ -109,19 +109,16 @@ def build_chapter_evaluation_focus(
             -float(getattr(r, "score_value", 0) or 0),
         ),
     )
+    order_parts: list[str] = []
     for req in sorted_reqs[:6]:
         title = getattr(req, "requirement_title", None) or "评分项"
-        score = float(getattr(req, "score_value", 0) or 0)
-        prefix = "刚性" if getattr(req, "is_risk_item", 0) == 1 else f"{score:g}分"
-        focus_parts: list[str] = []
-        keyword = (getattr(req, "keyword", None) or "").strip()
-        if keyword:
-            focus_parts.append(f"关键词：{keyword}")
-        mandatory = (getattr(req, "mandatory_elements", None) or "").strip()
-        if mandatory:
-            focus_parts.append(f"必备：{mandatory}")
-        detail = "；".join(focus_parts) if focus_parts else "须实质性响应评分细则"
-        lines.append(f"- [{prefix}] {title}：{detail}")
+        if getattr(req, "is_risk_item", 0) == 1:
+            order_parts.append(f"{title}（刚性）")
+        else:
+            score = float(getattr(req, "score_value", 0) or 0)
+            order_parts.append(f"{title}（{score:g}分）" if score > 0 else title)
+    if order_parts:
+        lines.append(f"- 优先响应顺序：{' > '.join(order_parts)}")
 
     if global_params:
         anchors = []
@@ -161,7 +158,7 @@ def maybe_refine_evaluation_focus(base_focus: str, bundle: dict) -> str:
         chapter_title = bundle.get("chapter_title") or "本章"
         prompt = (
             f"将下列评标关注点压缩为 3~5 条可执行要点（每条≤40字），"
-            f"保留刚性项与必备要素，不增删评分项名称。\n"
+            f"保留优先响应顺序与项目锚点，不增删评分项名称。\n"
             f"章节：{chapter_title}\n\n{focus}\n\n"
             "只输出列表，每条以 - 开头。"
         )

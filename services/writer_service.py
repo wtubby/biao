@@ -12,7 +12,6 @@ from config import ENABLE_CONTENT_PLAN, MAX_QA_RETRY
 from db.models import Project, TechOutline
 from services.chapter_context_service import (
     _enrich_retrieval_with_plan,
-    _init_key_chapter_messages,
     _is_key_chapter,
     build_context_bundle,
     group_leaves_by_section,
@@ -68,11 +67,8 @@ def write_and_qa_chapter(
         retrieval_warning = bundle.get("retrieval_warning")
         guidance = bundle["guidance"]
         is_key = _is_key_chapter(chapter, bundle["requirements"])
-        messages = chat_messages
-        if is_key and messages is None:
-            messages = _init_key_chapter_messages(
-                db, project, bundle["requirements"], bundle["all_nodes"]
-            )
+        # 关键章节多轮：首轮 chat_messages 为空时由 generation 走 build_writer_chat_messages
+        #（与普通章节同构），续轮只追加衔接块并保留 assistant 回复。
 
         if ENABLE_CONTENT_PLAN:
             plan = resolve_content_plan(bundle)

@@ -6,6 +6,8 @@ from datetime import datetime, timedelta, timezone
 from db.database import SessionLocal, init_db
 from db.models import Project, TechOutline, TechRequirement
 from services.compliance_service import (
+    _RESUME_KW,
+    _extract_section_names,
     check_chapter_length_balance,
     check_compliance_now,
     check_cross_consistency,
@@ -351,3 +353,23 @@ def test_check_chapter_length_balance_flags_dominant_chapter():
         assert all(i["level"] == "warn" for i in issues)
     finally:
         db.close()
+
+
+def test_extract_section_names_does_not_spill_into_later_chapters():
+    """简历小节关闭后，无关章节里的人名模式不得被带出。"""
+    text = "\n".join([
+        "项目人员简历",
+        "张三，担任项目经理",
+        "李四，担任技术负责人",
+        "本段介绍项目经历与业绩。",
+        "曾参与多项同类工程建设。",
+        "",
+        "施工方案",
+        "王五，担任现场施工员",
+        "进度计划",
+        "赵六，担任进度管理专员",
+    ])
+    names = _extract_section_names(text, _RESUME_KW)
+    assert names == {"张三", "李四"}
+    assert "王五" not in names
+    assert "赵六" not in names

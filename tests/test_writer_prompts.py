@@ -64,6 +64,38 @@ def test_writer_user_messages_split_for_cache():
     assert build_writer_user_prompt(_base_bundle()) == "\n\n".join(parts)
 
 
+def test_writer_user_messages_skip_project_context_for_chat_continuation():
+    full = build_writer_user_messages(_base_bundle())
+    cont = build_writer_user_messages(_base_bundle(), include_project_context=False)
+    assert full[0].startswith("## 全局工程信息")
+    assert not any(p.startswith("## 全局工程信息") for p in cont)
+    assert len(cont) == len(full) - 1
+    assert cont == full[1:]
+
+
+def test_key_chapter_chat_turn_matches_normal_prefix_then_skips_on_continue():
+    """关键章节首轮与普通章同构；续轮不重复注入全局工程信息。"""
+    from services.chapter_generation_service import _append_writer_chat_turn
+
+    bundle = _base_bundle()
+    first = _append_writer_chat_turn(
+        bundle, chat_messages=None, fix_instructions=None, structured=False,
+    )
+    normal = build_writer_chat_messages(bundle, structured=False)
+    assert first == normal
+    assert first[0]["role"] == "system"
+    assert first[1]["content"].startswith("## 全局工程信息")
+
+    history = first + [{"role": "assistant", "content": "第一章正文"}]
+    second = _append_writer_chat_turn(
+        bundle, chat_messages=history, fix_instructions=None, structured=False,
+    )
+    new_users = [m for m in second[len(history):] if m["role"] == "user"]
+    assert new_users
+    assert not any("## 全局工程信息" in (m.get("content") or "") for m in new_users)
+    assert sum(1 for m in second if "## 全局工程信息" in (m.get("content") or "")) == 1
+
+
 def test_writer_prompt_includes_other_leaves_and_overview():
     prompt = build_writer_user_prompt(_base_bundle())
     assert "全书其他叶子章节（禁止涉及）" in prompt
@@ -134,11 +166,12 @@ def test_plan_user_messages_split_for_cache():
 def test_plan_prompt_includes_matrix_context():
     prompt = build_plan_user_prompt(
         _base_bundle(
-            matrix_context="【本章评分响应矩阵】\n- 「施工组织设计」（15分）；同项还绑定：施工准备"
+            matrix_context="【评分项分工提醒】\n- 「施工组织设计」同项还绑定：施工准备"
         )
     )
-    assert "本章评分响应矩阵" in prompt
+    assert "评分项分工提醒" in prompt
     assert "施工准备" in prompt
+    assert "同项还绑定" in prompt
 
 
 def test_plan_prompt_includes_facts_chart_ref_and_scope():
@@ -236,3 +269,70 @@ def test_sample_content_for_summary_long_uses_head_and_tail():
     assert "中间部分省略" in sampled
     assert "MID" not in sampled
     assert len(sampled) < len(text)
+
+
+def test_writer_chapter_task_body_mandatory_elements_appear_once():
+    """requirements_text 为唯一完整源；matrix/focus 不得再复述必备要素。"""
+    import json
+    from types import SimpleNamespace
+
+    from prompts.writer_prompt import _writer_chapter_task_body
+    from services.requirement_prompt import (
+        build_chapter_evaluation_focus,
+        format_requirements_text,
+    )
+    from services.response_matrix_service import format_chapter_matrix_context
+
+    mandatory = "三级网络计划、周报制度"
+    req = SimpleNamespace(
+        id="r1",
+        requirement_title="施工组织设计",
+        score_value=15.0,
+        is_risk_item=1,
+        keyword="施工组织,总体部署",
+        mandatory_elements=mandatory,
+        source_text="应编制施工组织设计。",
+        score_category="技术",
+        evidence_materials="",
+        risk_hint="",
+    )
+    current = SimpleNamespace(
+        id="c1",
+        title="施工部署",
+        is_leaf=1,
+        requirement_ids=json.dumps([req.id]),
+        last_summary="",
+        generated_content="",
+    )
+    peer = SimpleNamespace(
+        id="c2",
+        title="施工准备",
+        is_leaf=1,
+        requirement_ids=json.dumps([req.id]),
+        last_summary="已说明临设布置与道路硬化。",
+        generated_content="",
+    )
+
+    body = _writer_chapter_task_body(
+        {
+            "requirements_text": format_requirements_text([req]),
+            "matrix_context": format_chapter_matrix_context(current, [req], [current, peer]),
+            "evaluation_focus": build_chapter_evaluation_focus(
+                "施工部署",
+                [req],
+                {"工程名称": "测试工程", "电压等级": "220kV"},
+            ),
+            "chapter_title": "施工部署",
+            "chapter_level": 2,
+            "chapter_path": "施工组织设计 > 施工部署",
+            "guidance": {"brief": "写部署", "content_boundary": "只写部署", "target_words": 800},
+            "sibling_leaf_titles": [],
+            "other_leaf_titles": [],
+        }
+    )
+    assert body.count(mandatory) == 1
+    assert "评分项分工提醒" in body
+    assert "同项还绑定" in body
+    assert "优先响应顺序：施工组织设计（刚性）" in body
+    assert body.count("必备要素") == 1
+    assert "必备：" not in body

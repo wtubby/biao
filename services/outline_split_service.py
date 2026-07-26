@@ -288,7 +288,20 @@ def apply_leaf_split(
 
     parent_words = leaf_target_words(leaf)
     n_children = len(child_specs)
-    per_child = max(400, parent_words // n_children) if parent_words else LONG_LEAF_SPLIT_TARGET_PER_CHILD
+    if parent_words:
+        per_child = parent_words // n_children
+        if per_child < 400:
+            # 字数不足以支撑地板值时，说明这个叶子不该被拆这么细；
+            # 用地板值但按 parent_words 反算，砍掉多余子节点数而不是放大总篇幅
+            logger.warning(
+                "拆分子节点数 %d 超出 %d 字预算可支撑范围（地板 400/节点），已按预算收窄",
+                n_children, parent_words,
+            )
+            n_children = max(LONG_LEAF_SPLIT_MIN_CHILDREN, parent_words // 400)
+            child_specs = child_specs[:n_children]
+            per_child = max(400, parent_words // n_children)
+    else:
+        per_child = LONG_LEAF_SPLIT_TARGET_PER_CHILD
     child_level = int(leaf.get("level") or 1) + 1
     parent_req_ids = list(leaf.get("requirement_ids") or [])
     inherited_folder = leaf.get("bound_folder")

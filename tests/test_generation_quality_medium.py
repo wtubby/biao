@@ -61,8 +61,11 @@ def test_build_chapter_evaluation_focus_lists_requirements_and_project():
         {"工程名称": "某变电站", "电压等级": "220kV", "总工期": 180},
     )
     assert "本章评标关注点" in text
-    assert "GIS" in text
-    assert "交接试验" in text
+    assert "优先响应顺序" in text
+    assert "GIS 安装调试（刚性）" in text
+    assert "关键词" not in text
+    assert "必备" not in text
+    assert "交接试验" not in text
     assert "220kV" in text
     assert "通稿套话" in text
 

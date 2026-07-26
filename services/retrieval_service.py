@@ -93,8 +93,13 @@ def expand_tokens(tokens: list[str]) -> list[str]:
             key = _reverse[t]
             expanded.append(key)
             expanded.extend(SYNONYMS.get(key, []))
+            continue  # 精确命中后不再做子串扩展，避免重复/冲突
+        if len(t) < 2:
+            continue  # 单字 token 子串命中噪音太大，直接跳过
         for key, vals in SYNONYMS.items():
-            if t in key or key in t:
+            if t == key or t in vals:
+                continue  # 已被上面 _reverse 精确覆盖
+            if (t in key or key in t) and len(t) >= 3 and abs(len(t) - len(key)) <= 2:
                 expanded.extend([key] + vals)
     return list(dict.fromkeys(expanded))
 

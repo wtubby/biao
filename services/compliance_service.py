@@ -170,17 +170,26 @@ def check_cross_consistency(
     return items
 
 
-def _extract_section_names(text: str, section_keywords: tuple[str, ...]) -> set[str]:
+def _extract_section_names(
+    text: str, section_keywords: tuple[str, ...], *, max_lines: int = 60,
+) -> set[str]:
+    """扫描简历/组织架构类小节内的人名；用行数窗口兜底关闭，不依赖 `#`（正文/docx 文本均无此符号）。"""
     lines = text.splitlines()
     in_section = False
+    section_line_count = 0
     names: set[str] = set()
     for line in lines:
+        stripped = line.strip()
         if any(kw in line for kw in section_keywords) and len(line) < 40:
             in_section = True
+            section_line_count = 0
             continue
-        if in_section and line.strip().startswith("#"):
-            break
         if in_section:
+            section_line_count += 1
+            # 空行 + 短行大概率是新小节标题，或超过窗口长度，判定小节结束
+            if (not stripped and section_line_count > 3) or section_line_count > max_lines:
+                in_section = False
+                continue
             for m in _NAME_RE.finditer(line):
                 names.add(m.group(1))
     return names

@@ -173,6 +173,16 @@ def test_check_chart_renderability_flags_missing_graphviz(monkeypatch):
     assert "Graphviz" in errors[0]
 
 
+def test_check_chart_renderability_flags_stray_chart_markers():
+    content = "进度安排如下：\n\n[[CHART:0]]\n\n后续措施说明。"
+    errors = check_chart_renderability(content)
+    assert errors
+    assert "未解析的图表占位符" in errors[0]
+    assert not check_chart_renderability(
+        '[GANTT_DATA: [{"工序":"A","开始第几天":1,"持续天数":5}]]'
+    )
+
+
 def test_check_first_paragraph_repeats_title():
     content = "施工组织设计\n\n本工程采用专项施工方案。"
     errs = check_first_paragraph_repeats_title(content, "施工组织设计")

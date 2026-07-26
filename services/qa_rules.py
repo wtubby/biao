@@ -458,6 +458,9 @@ def check_truncation_risk(content: str) -> list[str]:
     return []
 
 
+_STRAY_CHART_MARKER_RE = re.compile(r"\[\[CHART:\d+\]\]", re.IGNORECASE)
+
+
 def check_chart_renderability(content: str) -> list[str]:
     """检测正文中图表占位符是否可正常渲染（避免警示图进入正式稿）。"""
     import json
@@ -466,6 +469,11 @@ def check_chart_renderability(content: str) -> list[str]:
     from services.env_check import check_graphviz
 
     errors: list[str] = []
+    # 双保险：assemble 漏清时，拦截未解析的 [[CHART:N]] 残留（CHART_PATTERN 扫不到）
+    if _STRAY_CHART_MARKER_RE.search(content or ""):
+        errors.append(
+            "正文中存在未解析的图表占位符 [[CHART:N]]，请检查图表数据是否缺失"
+        )
     for match in CHART_PATTERN.finditer(content or ""):
         chart_type, raw_json = parse_chart_match(match)
         try:
