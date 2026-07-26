@@ -26,6 +26,19 @@ def test_default_generation_config():
 def test_chart_density_hint_variants():
     assert "尽量不插入" in chart_density_hint("none")
     assert "多使用" in chart_density_hint(CHART_DENSITY_ABUNDANT)
+    assert "文字论述" in chart_density_hint("normal", chapter_title="设计范围")
+    assert "GANTT" in chart_density_hint("normal", chapter_title="施工进度计划")
+    assert "ORG_DATA" in chart_density_hint("normal", chapter_title="组织机构")
+    assert "FLOW_DATA" in chart_density_hint("normal", chapter_title="主变吊装工艺")
+
+
+def test_build_generation_hints_scope_chapter_skips_smartart():
+    hints = build_generation_hints(
+        {"chart_density": "normal", "smartart_enabled": True},
+        chapter_title="设计范围",
+    )
+    assert "文字论述" in hints["chart_density_hint"]
+    assert "ORG_DATA" not in hints["chart_density_hint"]
 
 
 def test_estimate_from_leaves():

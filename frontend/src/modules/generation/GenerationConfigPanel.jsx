@@ -71,9 +71,12 @@ function ChartDensityPills({ value, disabled, onChange }) {
   );
 }
 
+const RESCALE_LOCKED_WARNING = '生成已完成，篇幅/字数设置不可再调整';
+
 function GenerationConfigPanel({
   projectId,
   disabled = false,
+  canRescale = true,
   showWordSlider = true,
   showModeSwitch = true,
   generationMode = 'full',
@@ -92,7 +95,11 @@ function GenerationConfigPanel({
   const pagesPatchSeqRef = useRef(0);
 
   const applyConfigResult = (data) => {
-    const { success: _success, ...rest } = data || {};
+    const {
+      success: _success,
+      rescale_locked_fields: _locked,
+      ...rest
+    } = data || {};
     setConfig(rest);
     const refText = rest.reference_bid_text || '';
     savedReferenceTextRef.current = refText;
@@ -123,6 +130,9 @@ function GenerationConfigPanel({
     if (!quiet) setSaving(true);
     try {
       const result = await updateGenerationConfig(projectId, patch);
+      const locked = Array.isArray(result?.rescale_locked_fields)
+        ? result.rescale_locked_fields
+        : [];
       const cleaned = applyConfigResult(result);
       onConfigUpdated?.(cleaned, {
         outlineChanged: Object.prototype.hasOwnProperty.call(patch, 'target_pages')
@@ -130,7 +140,9 @@ function GenerationConfigPanel({
           || Object.prototype.hasOwnProperty.call(patch, 'custom_total_words'),
         quiet,
       });
-      if (options.successMessage) {
+      if (locked.length) {
+        message.warning(RESCALE_LOCKED_WARNING);
+      } else if (options.successMessage) {
         message.success(options.successMessage);
       }
       return cleaned;
@@ -156,7 +168,7 @@ function GenerationConfigPanel({
   };
 
   const handlePagesCommit = async (v) => {
-    if (disabled) return;
+    if (disabled || !canRescale) return;
     const seq = ++pagesPatchSeqRef.current;
     setPagesSaving(true);
     handlePagesChange(v);
@@ -166,8 +178,14 @@ function GenerationConfigPanel({
         custom_word_count: false,
       });
       if (seq !== pagesPatchSeqRef.current) return;
+      const locked = Array.isArray(result?.rescale_locked_fields)
+        ? result.rescale_locked_fields
+        : [];
       const cleaned = applyConfigResult(result);
       onConfigUpdated?.(cleaned, { outlineChanged: true, quiet: true });
+      if (locked.length) {
+        message.warning(RESCALE_LOCKED_WARNING);
+      }
     } catch (e) {
       if (seq === pagesPatchSeqRef.current) message.error(e.message);
     } finally {
@@ -231,6 +249,7 @@ function GenerationConfigPanel({
     : BID_CATEGORY_OPTIONS
   ).map((opt) => ({ value: opt.value, label: opt.label }));
   const busy = disabled || saving;
+  const rescaleDisabled = disabled || !canRescale;
 
   return (
     <div className={`generation-config-panel${pagesSaving ? ' is-pages-saving' : ''}`}>
@@ -270,7 +289,7 @@ function GenerationConfigPanel({
               min={pageMin}
               max={pageMax}
               step={5}
-              disabled={disabled || config.custom_word_count}
+              disabled={rescaleDisabled || config.custom_word_count}
               value={Math.min(pageMax, Math.max(pageMin, targetPages))}
               onChange={handlePagesChange}
               onAfterChange={handlePagesCommit}
@@ -324,7 +343,7 @@ function GenerationConfigPanel({
             <div className="generation-config-pages-custom">
               <Checkbox
                 checked={!!config.custom_word_count}
-                disabled={busy || pagesSaving}
+                disabled={busy || pagesSaving || !canRescale}
                 onChange={(e) => {
                   if (!e.target.checked) {
                     patchConfig({ custom_word_count: false });
@@ -346,7 +365,7 @@ function GenerationConfigPanel({
                     size="small"
                     min={3000}
                     max={500000}
-                    disabled={busy}
+                    disabled={busy || !canRescale}
                     value={config.custom_total_words || estimate.total_words || ''}
                     onChange={(e) => {
                       const next = e.target.value ? Number(e.target.value) : null;
@@ -358,7 +377,7 @@ function GenerationConfigPanel({
                   <button
                     type="button"
                     className={`generation-config-inline-btn${customWordsDirty ? ' generation-config-inline-btn--pending' : ''}`}
-                    disabled={busy || !customWordsDirty}
+                    disabled={busy || !canRescale || !customWordsDirty}
                     onClick={() => patchConfig({
                       custom_word_count: true,
                       custom_total_words: config.custom_total_words || estimate.total_words,

@@ -22,6 +22,48 @@ logger = logging.getLogger(__name__)
 _ORPHAN_INTERRUPT_MSG = "服务重启或生成任务异常中断，请继续生成"
 
 
+def _summarize_retrieval_stats(leaves: list) -> dict:
+    """从各章 prompt_debug 汇总检索命中情况。"""
+    from services.prompt_debug_service import parse_stored_prompt_debug
+
+    total = 0
+    zero_hit = 0
+    with_hits = 0
+    unknown = 0
+    empty_reasons: dict[str, int] = {}
+    zero_titles: list[str] = []
+
+    for leaf in leaves or []:
+        if getattr(leaf, "is_leaf", 1) != 1:
+            continue
+        total += 1
+        debug = parse_stored_prompt_debug(getattr(leaf, "prompt_debug", None))
+        if not debug or "retrieval_hit_count" not in debug:
+            unknown += 1
+            continue
+        hits = int(debug.get("retrieval_hit_count") or 0)
+        if hits <= 0:
+            zero_hit += 1
+            reason = str(debug.get("retrieval_empty_reason") or "unknown")
+            empty_reasons[reason] = empty_reasons.get(reason, 0) + 1
+            title = (getattr(leaf, "title", None) or getattr(leaf, "id", ""))[:40]
+            if len(zero_titles) < 12:
+                zero_titles.append(title)
+        else:
+            with_hits += 1
+
+    ratio = (zero_hit / total) if total else 0.0
+    return {
+        "total": total,
+        "zero_hit": zero_hit,
+        "with_hits": with_hits,
+        "unknown": unknown,
+        "zero_hit_ratio": round(ratio, 4),
+        "empty_reasons": empty_reasons,
+        "zero_hit_samples": zero_titles,
+    }
+
+
 def recover_orphaned_generations(db=None) -> int:
     """清理崩溃/重启后残留的 generating 状态。
 
@@ -473,6 +515,19 @@ async def run_generation(project_id: str, resume: bool = False) -> None:
                     project.status = "done"
                 db.commit()
 
+                # 批量收尾：统计检索零命中占比（优先修检索而非改 prompt）
+                if not ctx.get("paused"):
+                    retrieval_stats = _summarize_retrieval_stats(leaves)
+                    ctx["retrieval_stats"] = retrieval_stats
+                    logger.info(
+                        "检索命中统计 project=%s total=%d zero_hit=%d (%.0f%%) reasons=%s",
+                        project_id,
+                        retrieval_stats["total"],
+                        retrieval_stats["zero_hit"],
+                        retrieval_stats["zero_hit_ratio"] * 100,
+                        retrieval_stats.get("empty_reasons") or {},
+                    )
+
                 # 批量生成完成后自动跑合规（不依赖 docx）
                 compliance_summary = None
                 if project and not ctx.get("paused"):
@@ -503,6 +558,8 @@ async def run_generation(project_id: str, resume: bool = False) -> None:
         }
         if ctx.get("compliance"):
             event["compliance"] = ctx["compliance"]
+        if ctx.get("retrieval_stats"):
+            event["retrieval_stats"] = ctx["retrieval_stats"]
         await push_event(project_id, event)
         return {}
 

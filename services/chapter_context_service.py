@@ -253,6 +253,17 @@ def build_context_bundle(
                 "禁止编造规范标准号与未提供的品牌型号；缺数据处用 **[参数] 待核实** 标注。"
             )
 
+    retrieval_hit_count = len(chunks)
+    retrieval_empty_reason = None if chunks else (retrieval.empty_reason or "no_match")
+    if retrieval_hit_count == 0:
+        logger.info(
+            "检索零命中 chapter=%s folder=%s reason=%s route=%s",
+            chapter.title,
+            chapter.bound_folder,
+            retrieval_empty_reason,
+            retrieval_route.mode,
+        )
+
     ref_raw = ""
     if gen_config.get("reference_bid_enabled"):
         ref_raw = (gen_config.get("reference_bid_text") or "").strip()
@@ -282,6 +293,12 @@ def build_context_bundle(
         else ""
     )
 
+    gen_hints = build_generation_hints(
+        gen_config,
+        chapter_title=chapter.title,
+        content_boundary=guidance.get("content_boundary") or "",
+    )
+
     bundle = {
         "global_params": global_params,
         "project_overview": overview,
@@ -294,6 +311,8 @@ def build_context_bundle(
         "retrieval_text": "\n\n---\n\n".join(chunks),
         "retrieval_route": retrieval_route.to_dict(),
         "retrieval_warning": retrieval_warning,
+        "retrieval_hit_count": retrieval_hit_count,
+        "retrieval_empty_reason": retrieval_empty_reason,
         "empty_retrieval_hint": empty_retrieval_hint,
         "last_summary": last_summary,
         "chapter_id": chapter.id,
@@ -309,7 +328,7 @@ def build_context_bundle(
         "global_facts_text": facts_text,
         "sibling_leaf_titles": sibling_leaf_titles,
         "other_leaf_titles": other_leaf_titles,
-        **build_generation_hints(gen_config),
+        **gen_hints,
         "standards_hint": standards_hint,
         "reference_bid_text": reference_bid_text,
         "reference_bid_miss": reference_bid_miss,
@@ -409,6 +428,13 @@ def _enrich_retrieval_with_plan(
     if merged:
         bundle["empty_retrieval_hint"] = None
         bundle["retrieval_warning"] = None
+        bundle["retrieval_hit_count"] = len(merged)
+        bundle["retrieval_empty_reason"] = None
+        logger.info(
+            "规划二次检索命中 chapter=%s hits=%d (含首轮合并)",
+            chapter.title,
+            len(merged),
+        )
 
 
 def _init_key_chapter_messages(

@@ -42,6 +42,33 @@ def test_qa_user_messages_split_for_cache():
     assert parts[-1].startswith("待质检正文片段")
 
 
+def test_qa_user_messages_do_not_duplicate_cacheable_prefix_fields():
+    """全书稳定前缀已含的三项，不得在章节上下文再次拼接。"""
+    facts = "【工期】180日历天-UNIQUE_FACTS_QA"
+    standards = "按电力施工惯例-UNIQUE_STANDARDS_QA"
+    blind = "## 暗标约束\n- 不得出现公司名-UNIQUE_BLIND_QA"
+    bundle = {
+        **_sample_bundle(),
+        "global_facts_text": facts,
+        "standards_hint": standards,
+        "blind_bid_constraints": blind,
+        "chart_density_hint": "适量图表-UNIQUE_CHART_QA",
+    }
+    parts = build_qa_user_messages("待检正文", bundle)
+    joined = "\n\n".join(parts)
+    assert joined.count(facts) == 1
+    assert joined.count(standards) == 1
+    assert joined.count(blind) == 1
+    # 前缀外字段仍应出现在章节上下文
+    assert "适量图表-UNIQUE_CHART_QA" in parts[1]
+    assert facts in parts[0]
+    assert standards in parts[0]
+    assert blind in parts[0]
+    assert facts not in parts[1]
+    assert standards not in parts[1]
+    assert blind not in parts[1]
+
+
 def test_build_chunk_context_prefix_includes_folder_and_topic():
     prefix = build_chunk_context_prefix(
         folder="电力规范",

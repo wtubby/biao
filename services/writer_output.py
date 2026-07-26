@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any
 
 from llm.schemas import WriterOutputSchema
+
+logger = logging.getLogger(__name__)
 
 VALID_CHART_TYPES = frozenset(
     {"GANTT_DATA", "TIMELINE_DATA", "FLOW_DATA", "ORG_DATA", "SMART_DATA"}
@@ -62,10 +65,24 @@ def parse_writer_output(raw: dict[str, Any]) -> tuple[str, dict[int, dict[str, A
     charts_raw = validated.resolved_charts_raw()
 
     charts: dict[int, dict[str, Any]] = {}
+    dropped: list[int] = []
     for i, item in enumerate(charts_raw):
         normalized = _normalize_chart_entry(item, i)
         if normalized:
             charts[i] = normalized
+        else:
+            dropped.append(i)
+
+    referenced = {int(m.group(1)) for m in _CHART_MARKER_RE.finditer(markdown or "")}
+    unmatched_refs = sorted(referenced - charts.keys())
+    if unmatched_refs or dropped:
+        logger.warning(
+            "writer chart index mismatch: referenced=%s resolved=%s dropped=%s unmatched_refs=%s",
+            sorted(referenced),
+            sorted(charts.keys()),
+            dropped,
+            unmatched_refs,
+        )
     return markdown, charts
 
 
@@ -76,6 +93,9 @@ def assemble_chapter_content(
     """将结构化输出组装为带 [TYPE: {...}] 占位符的正文。"""
     text = (markdown_content or "").strip()
     if not embedded_charts:
+        # 无有效图表时仍清掉残留 [[CHART:N]]，避免裸标记进入正式正文
+        if _CHART_MARKER_RE.search(text):
+            return _CHART_MARKER_RE.sub("", text).strip()
         return text
 
     placeholders: dict[int, str] = {
@@ -95,6 +115,11 @@ def assemble_chapter_content(
             if int(m.group(1)) in placeholders
         }
         trailing = [placeholders[i] for i in sorted(placeholders) if i not in used]
+        # 清理未匹配上的残留标记，而非放任其进入正文
+        assembled = _CHART_MARKER_RE.sub(
+            lambda m: "" if int(m.group(1)) not in placeholders else m.group(0),
+            assembled,
+        )
         if trailing:
             assembled = assembled.rstrip() + "\n\n" + "\n".join(trailing)
         return assembled.strip()

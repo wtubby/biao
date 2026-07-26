@@ -1152,7 +1152,7 @@ a, .ant-btn-link { color: var(--color-accent); }
 
 .parse-dual-layout {
   display: grid;
-  grid-template-columns: minmax(320px, 1.15fr) minmax(300px, 0.85fr);
+  grid-template-columns: minmax(320px, 1fr) minmax(320px, 1fr);
   gap: 16px;
   align-items: stretch;
   flex: 1;
@@ -1195,7 +1195,7 @@ a, .ant-btn-link { color: var(--color-accent); }
 
 .upload-dual-layout {
   display: grid;
-  grid-template-columns: minmax(420px, 1.2fr) minmax(380px, 0.8fr);
+  grid-template-columns: minmax(380px, 1fr) minmax(380px, 1fr);
   gap: 16px;
   align-items: stretch;
   flex: 1;
@@ -1545,9 +1545,9 @@ mark.source-locate-mark {
   box-shadow: inset 3px 0 0 #2563eb;
 }
 
-/* 核对页双栏：左检查项可滚，右原文固定预览 */
+/* 核对页双栏：左原文固定预览，右检查项可滚 */
 .confirm-dual-layout {
-  grid-template-columns: minmax(360px, 1.05fr) minmax(320px, 0.95fr);
+  grid-template-columns: minmax(360px, 1fr) minmax(360px, 1fr);
 }
 
 .confirm-dual-form .ant-card-body {
@@ -1558,10 +1558,6 @@ mark.source-locate-mark {
 
 .confirm-dual-form .tender-detail-panel {
   padding-bottom: 24px;
-}
-
-.confirm-wizard-panel .outline-step-nav {
-  margin-bottom: 4px;
 }
 
 .confirm-wizard-step-hint {
@@ -2050,6 +2046,17 @@ a:focus-visible,
   line-height: 1.5;
 }
 
+.prompt-message-block {
+  margin-bottom: 12px;
+}
+
+.prompt-message-role {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+
 /* 钛投标式解析核对页 */
 .tender-detail-panel {
   display: flex;
@@ -2124,9 +2131,57 @@ a:focus-visible,
   font-weight: 600;
 }
 
+.tender-qual-table {
+  width: 100%;
+  max-width: 100%;
+}
+
+.tender-qual-table .ant-table {
+  width: 100% !important;
+  table-layout: fixed;
+}
+
+.tender-qual-table .ant-table-container,
+.tender-qual-table .ant-table-content {
+  overflow-x: visible !important;
+}
+
+.tender-qual-table .ant-table-thead > tr > th,
+.tender-qual-table .ant-table-tbody > tr > td {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
+}
+
+.tender-qual-table .ant-table-thead > tr > th:nth-child(1),
+.tender-qual-table .ant-table-tbody > tr > td:nth-child(1) {
+  width: 48px;
+  text-align: center;
+}
+
+.tender-qual-table .ant-table-thead > tr > th:nth-child(2),
+.tender-qual-table .ant-table-tbody > tr > td:nth-child(2) {
+  width: 88px;
+  text-align: center;
+}
+
+.tender-qual-table .ant-table-thead > tr > th:nth-child(4),
+.tender-qual-table .ant-table-tbody > tr > td:nth-child(4) {
+  width: 56px;
+  text-align: center;
+  padding-left: 4px;
+  padding-right: 4px;
+}
+
+.tender-qual-table .ant-table-tbody > tr > td:nth-child(4) .ant-btn {
+  padding-inline: 0;
+}
+
 .tender-qual-table .qual-desc-locate {
   display: block;
   width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
   padding: 0;
   border: none;
   background: transparent;
@@ -2135,6 +2190,7 @@ a:focus-visible,
   line-height: 1.5;
   text-align: left;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
   word-break: break-word;
   cursor: pointer;
 }
@@ -2245,7 +2301,6 @@ a:focus-visible,
 .gen-page-preview-prompt {
   margin-left: auto;
   flex-shrink: 0;
-  padding-inline: 0;
 }
 
 .gen-page-tree-wrap {

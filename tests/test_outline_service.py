@@ -250,10 +250,14 @@ def test_enrich_outline_nodes_shared_requirement_not_double_counted():
         for n in enriched if n.get("is_leaf")
     ]
     assert len(words) == 3
-    assert words[0] == words[1] == words[2]
+    # 组织机构/人员配置权重更低，机具配置保持默认权重
+    assert words[0] == words[1]
+    assert words[2] > words[0]
     assert sum(words) <= total_budget + 3
     # 旧逻辑会对每个叶子各给 100% 预算，总和约 3 倍
     assert sum(words) < total_budget * 1.5
+    # 加权后仍归一化到原预算附近
+    assert abs(sum(words) - total_budget) <= 3
 
 
 def test_sanitize_branch_expand_nodes_renames_wrong_prefix_ids():

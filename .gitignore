@@ -1,5 +1,6 @@
 uploads/
 output/
+logs/
 models/
 *.db
 *.db-shm

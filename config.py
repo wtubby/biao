@@ -92,6 +92,9 @@ MAX_SEGMENT_QA_RETRY = int(os.getenv("MAX_SEGMENT_QA_RETRY", "1"))
 ENABLE_CHUNK_CONTEXT_PREFIX = os.getenv("ENABLE_CHUNK_CONTEXT_PREFIX", "1").lower() in ("1", "true", "yes")
 # 记录 LLM 响应中的 prompt_cache_hit_tokens（DeepSeek 等自动前缀缓存）
 LOG_PROMPT_CACHE_USAGE = os.getenv("LOG_PROMPT_CACHE_USAGE", "1").lower() in ("1", "true", "yes")
+# 每次生成将完整提示词快照写入 logs/prompts（便于质量分析）
+LOG_PROMPTS = os.getenv("LOG_PROMPTS", "1").lower() in ("1", "true", "yes")
+PROMPT_LOG_DIR = Path(os.getenv("PROMPT_LOG_DIR", str(BASE_DIR / "logs" / "prompts")))
 # 高分施工章用 LLM 精炼评标关注点（默认关闭，避免额外延迟）
 EVALUATION_FOCUS_LLM_REFINE = os.getenv("EVALUATION_FOCUS_LLM_REFINE", "0").lower() in ("1", "true", "yes")
 EVALUATION_FOCUS_REFINE_MIN_SCORE = float(os.getenv("EVALUATION_FOCUS_REFINE_MIN_SCORE", "8"))

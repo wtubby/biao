@@ -30,12 +30,14 @@ def test_generating_status_ignores_custom_total_words_config_write():
         patch("routers.outline.scale_leaves_to_total_words") as scale,
         patch("routers.outline._build_generation_payload", return_value={"ok": True}),
     ):
-        update_generation_config_api("p-gen", body, db=_mock_db(project))
+        result = update_generation_config_api("p-gen", body, db=_mock_db(project))
 
     scale.assert_not_called()
     cfg = get_generation_config(project)
     assert cfg.get("custom_word_count") is False
     assert cfg.get("custom_total_words") is None
+    assert result["success"] is True
+    assert result["rescale_locked_fields"] == ["custom_word_count", "custom_total_words"]
 
 
 def test_planning_status_applies_custom_total_words():
@@ -51,12 +53,13 @@ def test_planning_status_applies_custom_total_words():
         patch("routers.outline.scale_leaves_to_total_words") as scale,
         patch("routers.outline._build_generation_payload", return_value={"ok": True}),
     ):
-        update_generation_config_api("p-plan", body, db=_mock_db(project))
+        result = update_generation_config_api("p-plan", body, db=_mock_db(project))
 
     scale.assert_called_once()
     cfg = get_generation_config(project)
     assert cfg.get("custom_word_count") is True
     assert cfg.get("custom_total_words") == 52000
+    assert "rescale_locked_fields" not in result
 
 
 def test_generating_status_ignores_target_pages_meta_write():
@@ -74,10 +77,48 @@ def test_generating_status_ignores_target_pages_meta_write():
         patch("routers.outline.reapply_outline_generation_mode") as reapply,
         patch("routers.outline._build_generation_payload", return_value={"ok": True}),
     ):
-        update_generation_config_api("p-gen-pages", body, db=_mock_db(project))
+        result = update_generation_config_api("p-gen-pages", body, db=_mock_db(project))
 
     reapply.assert_not_called()
     assert int(get_meta(project).get("target_pages") or 0) == 40
+    assert result["rescale_locked_fields"] == ["target_pages", "custom_word_count"]
+
+
+def test_done_status_reports_rescale_locked_fields_without_blocking_other_updates():
+    """done 不可重算时返回 locked 字段，同时仍允许保存 chart_density 等展示配置。"""
+    project = Project(
+        id="p-done",
+        name="t",
+        status="done",
+        created_at=datetime(2026, 1, 1),
+        extra_params="{}",
+    )
+    set_meta(project, target_pages=40)
+    body = GenerationConfigUpdate(
+        target_pages=80,
+        chart_density="abundant",
+        custom_word_count=True,
+        custom_total_words=52000,
+    )
+    with (
+        patch("routers.outline.scale_leaves_to_total_words") as scale,
+        patch("routers.outline.reapply_outline_generation_mode") as reapply,
+        patch("routers.outline._build_generation_payload", return_value={"ok": True}),
+    ):
+        result = update_generation_config_api("p-done", body, db=_mock_db(project))
+
+    scale.assert_not_called()
+    reapply.assert_not_called()
+    assert int(get_meta(project).get("target_pages") or 0) == 40
+    cfg = get_generation_config(project)
+    assert cfg.get("chart_density") == "abundant"
+    assert cfg.get("custom_word_count") is False
+    assert result["success"] is True
+    assert result["rescale_locked_fields"] == [
+        "target_pages",
+        "custom_word_count",
+        "custom_total_words",
+    ]
 
 
 def test_outline_locked_status_applies_target_pages():
@@ -94,10 +135,11 @@ def test_outline_locked_status_applies_target_pages():
         patch("routers.outline.reapply_outline_generation_mode") as reapply,
         patch("routers.outline._build_generation_payload", return_value={"ok": True}),
     ):
-        update_generation_config_api("p-locked-pages", body, db=_mock_db(project))
+        result = update_generation_config_api("p-locked-pages", body, db=_mock_db(project))
 
     reapply.assert_called()
     assert int(get_meta(project).get("target_pages") or 0) == 80
+    assert "rescale_locked_fields" not in result
 
 
 def test_custom_total_words_rejects_out_of_range():

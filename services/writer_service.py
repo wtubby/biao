@@ -93,6 +93,7 @@ def write_and_qa_chapter(
                 bundle,
                 chapter,
                 fix_instructions=fix_instructions,
+                project_id=project.id,
             )
             content, messages = generate_chapter_content(
                 bundle,
@@ -129,6 +130,7 @@ def write_and_qa_chapter(
                 chapter,
                 fix_instructions=fix_instructions,
                 content_for_qa=content,
+                project_id=project.id,
             )
             soft_issues = _soft_issue_list(soft)
             if soft.get("skipped"):

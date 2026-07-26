@@ -86,3 +86,39 @@ def test_assemble_preserves_chart_indices_after_middle_chart_filtered():
     assert "[GANTT_DATA:" in out
     assert "[FLOW_DATA:" in out
     assert out.index("[GANTT_DATA:") < out.index("[FLOW_DATA:")
+
+
+def test_assemble_strips_unmatched_chart_markers():
+    charts = {
+        0: {"type": "GANTT_DATA", "data": [{"工序": "A", "开始第几天": 1, "持续天数": 1}]},
+    }
+    out = assemble_chapter_content(
+        "有图：[[CHART:0]]\n\n无图：[[CHART:2]]\n\n收尾。",
+        charts,
+    )
+    assert "[GANTT_DATA:" in out
+    assert "[[CHART:" not in out
+    assert "无图：" in out
+    assert "收尾。" in out
+
+
+def test_assemble_strips_markers_when_all_charts_invalid():
+    out = assemble_chapter_content("正文[[CHART:0]]结尾", {})
+    assert out == "正文结尾"
+    assert "[[CHART:" not in out
+
+
+def test_parse_writer_output_warns_on_index_mismatch(caplog):
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="services.writer_output"):
+        md, charts = parse_writer_output({
+            "markdown_content": "见图[[CHART:0]]与[[CHART:1]]",
+            "embedded_charts": [
+                {"type": "INVALID_TYPE", "data": []},
+                {"type": "GANTT_DATA"},  # data 缺失
+            ],
+        })
+    assert md == "见图[[CHART:0]]与[[CHART:1]]"
+    assert charts == {}
+    assert any("writer chart index mismatch" in r.message for r in caplog.records)

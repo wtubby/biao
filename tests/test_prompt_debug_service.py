@@ -156,6 +156,14 @@ def test_chapter_prompt_preview_includes_content_plan_in_writer():
         assert "关键路径" in qa_stage["user"]
         assert preview.get("prompt_metrics", {}).get("total_tokens_est", 0) > 0
         assert writer_stage.get("metrics", {}).get("user_tokens_est", 0) > 0
+        assert isinstance(writer_stage.get("messages"), list)
+        assert len(writer_stage["messages"]) >= 2
+        assert writer_stage["messages"][0]["role"] == "system"
+        assert all(m["role"] in ("system", "user") for m in writer_stage["messages"])
+        assert sum(1 for m in writer_stage["messages"] if m["role"] == "user") >= 1
+        assert writer_stage["metrics"].get("user_message_count", 0) >= 1
+        assert isinstance(qa_stage.get("messages"), list)
+        assert qa_stage["messages"][0]["role"] == "system"
     finally:
         db.close()
 
@@ -187,3 +195,7 @@ def test_capture_generation_prompt_debug_includes_retrieval_route():
     assert data["retrieval_route"]["mode"] == "light"
     assert data["retrieval_route"]["top_k"] == 3
     assert data["retrieval_warning"] == "测试警告"
+    writer = next(s for s in data["stages"] if s["id"] == "writer")
+    assert isinstance(writer.get("messages"), list)
+    assert writer["messages"][0]["role"] == "system"
+    assert any(m["role"] == "user" for m in writer["messages"])

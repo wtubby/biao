@@ -97,6 +97,39 @@ def get_chapter_constraints(title: str | None) -> str | None:
     return _CHAPTER_CONSTRAINTS.get(get_chapter_type(title))
 
 
+# 字数预算类型权重：范围/组织类信息量低 → 降权；工艺/方案类 → 提权
+_SCOPE_MARKERS = (
+    "设计范围", "工作范围", "服务范围", "承包范围", "招标范围",
+    "范围界定", "范围定义", "工作界面", "接口界面",
+)
+_ORG_MARKERS = (
+    "组织机构", "组织架构", "岗位职责", "人员配置", "管理体系", "组织管理",
+)
+_TECH_MARKERS = (
+    "工艺", "方案", "措施", "吊装", "安装", "调试", "试验",
+    "施工方法", "专项", "工序", "关键技术",
+)
+
+
+def get_word_budget_weight(title: str | None) -> float:
+    """按章节标题类型返回字数权重（再归一化到总预算）。"""
+    t = (title or "").strip()
+    if not t:
+        return 1.0
+    ctype = get_chapter_type(t)
+    if ctype == "goal":
+        return 0.5
+    if ctype == "overview":
+        return 0.65
+    if any(m in t for m in _SCOPE_MARKERS):
+        return 0.7
+    if any(m in t for m in _ORG_MARKERS):
+        return 0.85
+    if any(m in t for m in _TECH_MARKERS):
+        return 1.15
+    return 1.0
+
+
 def _match_goal(t: str) -> bool:
     if "目标" not in t:
         return False

@@ -15,20 +15,12 @@ DEFAULT_FACT_GROUPS = [
 
 
 def _basic_info_content(project: Project) -> str:
-    lines = []
-    if project.name:
-        lines.append(f"工程名称：{project.name}")
-    if project.voltage_level:
-        lines.append(f"电压等级：{project.voltage_level}")
-    if project.capacity:
-        lines.append(f"工程规模：{project.capacity}")
-    if project.duration_days:
-        lines.append(f"总工期：{project.duration_days} 日历天")
-    if project.transformer_count:
-        lines.append(f"主变台数：{project.transformer_count}")
-    if project.location:
-        lines.append(f"建设地点：{project.location}")
-    return "\n".join(lines)
+    """项目基本信息分组：数值真相源已在「全局工程信息」JSON，此处仅保留规则提示。"""
+    _ = project  # 签名保留，便于 sync/init 调用方不变
+    return (
+        "工程名称、电压等级、规模、工期、地点等数值以「全局工程信息」为准；"
+        "正文涉及时不得与其冲突。若存在招标文件矛盾点，须择一立场并全书一致。"
+    )
 
 
 def init_default_facts(db: Session, project: Project) -> list[GlobalFact]:

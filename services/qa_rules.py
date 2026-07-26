@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections import Counter
 
 from services.writing_guidance import get_chapter_type, is_descriptive_chapter
 
@@ -573,6 +574,29 @@ def check_paragraph_opening_repetition(content: str, *, min_repeat: int = 3) -> 
         else:
             streak = 1
     return []
+
+
+def check_opening_pattern_overuse(
+    content: str,
+    *,
+    min_count: int = 3,
+    min_len: int = 5,
+) -> list[str]:
+    """统计全篇（非连续）段落开头重复次数，抓分散式套路化开头。"""
+    paragraphs = _extract_body_paragraphs(content)
+    if len(paragraphs) < min_count:
+        return []
+    openings = [
+        o for o in (_paragraph_opening(p) for p in paragraphs)
+        if o and len(o) >= min_len
+    ]
+    counts = Counter(openings)
+    offenders = [(o, c) for o, c in counts.items() if c >= min_count]
+    if not offenders:
+        return []
+    offenders.sort(key=lambda x: -x[1])
+    o, c = offenders[0]
+    return [f"「{o}」句式在全文中重复出现 {c} 次（非连续），建议更换表达方式"]
 
 
 def check_markdown_table_integrity(content: str) -> list[str]:

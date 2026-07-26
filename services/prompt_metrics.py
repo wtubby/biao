@@ -32,16 +32,44 @@ def estimate_prompt_stage(system: str, user: str) -> dict[str, int]:
     }
 
 
+def estimate_messages_tokens(messages: list[dict[str, Any]] | None) -> dict[str, int]:
+    """按真实 chat messages 估算体量。"""
+    system_parts: list[str] = []
+    user_parts: list[str] = []
+    other_parts: list[str] = []
+    user_message_count = 0
+    for msg in messages or []:
+        role = str(msg.get("role") or "")
+        content = str(msg.get("content") or "")
+        if role == "system":
+            system_parts.append(content)
+        elif role == "user":
+            user_parts.append(content)
+            user_message_count += 1
+        else:
+            other_parts.append(content)
+    metrics = estimate_prompt_stage(
+        "\n".join(system_parts),
+        "\n".join(user_parts + other_parts),
+    )
+    metrics["message_count"] = len(messages or [])
+    metrics["user_message_count"] = user_message_count
+    return metrics
+
+
 def attach_stage_metrics(stages: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, int]]:
     """为各 stage 附加 metrics，并返回汇总。"""
     annotated: list[dict[str, Any]] = []
     total_tokens = 0
     total_chars = 0
     for stage in stages:
-        metrics = estimate_prompt_stage(
-            str(stage.get("system") or ""),
-            str(stage.get("user") or ""),
-        )
+        if stage.get("messages"):
+            metrics = estimate_messages_tokens(stage.get("messages"))
+        else:
+            metrics = estimate_prompt_stage(
+                str(stage.get("system") or ""),
+                str(stage.get("user") or ""),
+            )
         total_tokens += metrics["total_tokens_est"]
         total_chars += metrics["system_chars"] + metrics["user_chars"]
         item = dict(stage)

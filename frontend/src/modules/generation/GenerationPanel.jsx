@@ -160,8 +160,13 @@ function GenerationPanel({
       }
       const greenCount = data.green_count || 0;
       const yellowCount = data.yellow_count || 0;
+      const rs = data.retrieval_stats;
+      let retrievalExtra = '';
+      if (rs && rs.total > 0) {
+        retrievalExtra = `；检索零命中 ${rs.zero_hit}/${rs.total}（${Math.round((rs.zero_hit_ratio || 0) * 100)}%）`;
+      }
       message.success(
-        `生成完成：通过 ${greenCount}，待检 ${yellowCount}，失败 ${data.red_count}${extra}`,
+        `生成完成：通过 ${greenCount}，待检 ${yellowCount}，失败 ${data.red_count}${extra}${retrievalExtra}`,
       );
       streamDisconnectRef.current?.();
       setBatchGenerating(false);
@@ -246,11 +251,25 @@ function GenerationPanel({
         onHasGeneratedChapter?.(true);
       }
       await loadOutline();
-      message.success(
-        hadContent
-          ? '章节已重新生成；修改前版本已自动保存，可在「预览与导出 → 版本历史」中恢复'
-          : '章节生成完成',
-      );
+      message.success({
+        content: (
+          <span>
+            {hadContent
+              ? '章节已重新生成（旧版可在版本历史恢复）'
+              : '章节生成完成'}
+            {' · '}
+            <a
+              onClick={(e) => {
+                e.preventDefault();
+                setPromptOpen(true);
+              }}
+            >
+              检查提示词
+            </a>
+          </span>
+        ),
+        duration: 8,
+      });
     } catch (err) {
       updateChapter(chapterId, { review_status: 'red' });
       message.error(err.message);
@@ -425,6 +444,7 @@ function GenerationPanel({
             <GenerationConfigPanel
               projectId={projectId}
               disabled={!canGenerateContent || isBatchRunning}
+              canRescale={['planning', 'outline_locked'].includes(projectStatus || '')}
               generationMode={generationMode}
               onGenerationModeChange={(mode) => {
                 onGenerationModeChange?.(mode);
@@ -511,11 +531,10 @@ function GenerationPanel({
               {selected && (
                 <Button
                   size="small"
-                  type="link"
                   className="gen-page-preview-prompt"
                   onClick={() => setPromptOpen(true)}
                 >
-                  查看提示词
+                  检查提示词
                 </Button>
               )}
             </div>
@@ -582,7 +601,7 @@ function GenerationPanel({
         onClose={() => setPromptOpen(false)}
         title={selected ? `《${selected.title}》生成提示词` : '章节生成提示词'}
         fetchPath={selected ? `/projects/${projectId}/chapters/${selected.id}/prompts` : null}
-        hint="可查看写作规划、正文撰写、软质检各阶段提示词。"
+        hint="展示真实 chat messages（system + 多条 user）。生成后请切换「上次生成快照」；可下载 JSON。"
       />
     </Card>
   );

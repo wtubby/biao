@@ -3,12 +3,21 @@
 from __future__ import annotations
 
 import json
+import logging
+import re
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy.orm import Session
 
-from config import ENABLE_CONTENT_PLAN, SKIP_CONTENT_PLAN_WORD_THRESHOLD
+from config import (
+    ENABLE_CONTENT_PLAN,
+    LOG_PROMPTS,
+    PROMPT_LOG_DIR,
+    SKIP_CONTENT_PLAN_WORD_THRESHOLD,
+    WRITER_STRUCTURED_OUTPUT,
+)
 from db.models import Project, TechOutline, TechRequirement
 from domains.registry import DEFAULT_DOMAIN
 from prompts.outline_prompt import (
@@ -21,18 +30,93 @@ from prompts.outline_prompt import (
 from services.knowledge_registry import get_knowledge_folders
 from services.outline_order import sort_outline_tree_dfs
 from services.outline_service import _other_branches_for_expand
-from prompts.plan_prompt import build_plan_user_prompt, get_plan_system_prompt
-from prompts.qa_prompt import QA_SYSTEM_PROMPT, build_qa_user_prompt
-from prompts.writer_prompt import (
-    build_writer_user_prompt,
-    get_writer_system_prompt,
-)
+from prompts.plan_prompt import build_plan_chat_messages, get_plan_system_prompt
+from prompts.qa_prompt import build_qa_chat_messages
+from prompts.writer_prompt import build_writer_chat_messages
 from services.generation_mode import get_generation_mode
 from services.prompt_project_info import build_prompt_global_params
 from services.requirement_utils import requirement_dicts
 from services.project_meta import get_meta, get_outline_catalog
 from services.prompt_metrics import attach_stage_metrics
 from services.writing_guidance import get_chapter_type, should_skip_content_plan
+
+logger = logging.getLogger(__name__)
+
+_SAFE_NAME_RE = re.compile(r"[^\w.\-]+", re.UNICODE)
+
+
+def _safe_name(value: str | None, fallback: str = "unknown") -> str:
+    text = (value or "").strip() or fallback
+    return _SAFE_NAME_RE.sub("_", text)[:80]
+
+
+def persist_prompt_log(
+    payload: dict[str, Any],
+    *,
+    kind: str = "chapter",
+    project_id: str | None = None,
+) -> str | None:
+    """将提示词快照写入 logs/prompts，并打摘要日志。返回文件路径或 None。"""
+    if not LOG_PROMPTS:
+        return None
+    try:
+        captured = payload.get("captured_at") or datetime.now(timezone.utc).isoformat()
+        stamp = captured.replace(":", "").replace("+", "_")[:20]
+        project_key = _safe_name(project_id or payload.get("project_id"), "project")
+        # 文件名只用 ASCII 标识（chapter_id / branch_id / kind），中文标题仅写入 JSON 正文
+        chapter_key = _safe_name(
+            payload.get("chapter_id") or payload.get("branch_id") or kind,
+            kind,
+        )
+        out_dir = Path(PROMPT_LOG_DIR) / project_key
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / f"{stamp}_{kind}_{chapter_key}.json"
+        record = {
+            "kind": kind,
+            "project_id": project_id or payload.get("project_id"),
+            **payload,
+        }
+        out_path.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        stages = payload.get("stages") or []
+        metrics = payload.get("prompt_metrics") or {}
+        stage_labels = ", ".join(str(s.get("label") or s.get("id") or "") for s in stages)
+        logger.info(
+            "提示词已落盘 kind=%s project=%s chapter=%s stages=[%s] tokens≈%s path=%s",
+            kind,
+            project_id or payload.get("project_id"),
+            payload.get("chapter_id") or payload.get("chapter_title"),
+            stage_labels,
+            metrics.get("total_tokens_est"),
+            out_path,
+        )
+        return str(out_path)
+    except Exception as exc:
+        logger.warning("提示词落盘失败: %s", exc)
+        return None
+
+
+def persist_messages_prompt_log(
+    *,
+    kind: str,
+    label: str,
+    messages: list[dict],
+    project_id: str | None = None,
+    extra: dict[str, Any] | None = None,
+) -> str | None:
+    """将实际发送的 messages 列表写入提示词日志。"""
+    stages = [_stage_from_messages(kind, label, messages)]
+    stages, prompt_metrics = attach_stage_metrics(stages)
+    payload: dict[str, Any] = {
+        "label": label,
+        "stages": stages,
+        "prompt_metrics": prompt_metrics,
+        "messages": _normalize_messages(messages),
+        "captured_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if extra:
+        payload.update(extra)
+    return persist_prompt_log(payload, kind=kind, project_id=project_id)
 
 
 def _parse_content_plan(chapter: TechOutline) -> dict | None:
@@ -116,6 +200,41 @@ def _stage(stage_id: str, label: str, system: str, user: str, **extra: Any) -> d
     return payload
 
 
+def _normalize_messages(messages: list[dict] | None) -> list[dict[str, str]]:
+    normalized: list[dict[str, str]] = []
+    for msg in messages or []:
+        role = str(msg.get("role") or "user")
+        content = str(msg.get("content") or "")
+        normalized.append({"role": role, "content": content})
+    return normalized
+
+
+def _stage_from_messages(
+    stage_id: str,
+    label: str,
+    messages: list[dict],
+    **extra: Any,
+) -> dict[str, Any]:
+    """用真实 chat messages 组装 stage；system/user 字段保留作兼容预览。"""
+    from services.prompt_metrics import estimate_messages_tokens
+
+    normalized = _normalize_messages(messages)
+    system = next((m["content"] for m in normalized if m["role"] == "system"), "")
+    user_parts = [m["content"] for m in normalized if m["role"] == "user"]
+    user = "\n\n".join(user_parts)
+    payload: dict[str, Any] = {
+        "id": stage_id,
+        "label": label,
+        "system": system,
+        "user": user,
+        "messages": normalized,
+        "message_count": len(normalized),
+        "metrics": estimate_messages_tokens(normalized),
+    }
+    payload.update(extra)
+    return payload
+
+
 def build_outline_prompt_preview(db: Session, project: Project) -> dict[str, Any]:
     requirements = (
         db.query(TechRequirement)
@@ -149,8 +268,22 @@ def build_outline_prompt_preview(db: Session, project: Project) -> dict[str, Any
         other_branches=_other_branches_for_expand(level2_nodes, preview_branch),
     )
     outline_stages = [
-        _stage("outline_skeleton", "大纲骨架", get_skeleton_system_prompt(domain), skeleton_user),
-        _stage("outline_branch", branch_label, get_branch_system_prompt(domain), branch_user),
+        _stage_from_messages(
+            "outline_skeleton",
+            "大纲骨架",
+            [
+                {"role": "system", "content": get_skeleton_system_prompt(domain)},
+                {"role": "user", "content": skeleton_user},
+            ],
+        ),
+        _stage_from_messages(
+            "outline_branch",
+            branch_label,
+            [
+                {"role": "system", "content": get_branch_system_prompt(domain)},
+                {"role": "user", "content": branch_user},
+            ],
+        ),
     ]
     stages, prompt_metrics = attach_stage_metrics(outline_stages)
     return {
@@ -199,23 +332,24 @@ def build_chapter_prompt_preview(
             )
         else:
             stages.append(
-                _stage(
+                _stage_from_messages(
                     "plan",
                     "写作规划",
-                    get_plan_system_prompt(domain),
-                    build_plan_user_prompt(bundle),
-                    note="实际请求按多条 user 消息分层发送（项目上下文→衔接→检索→本章任务），利于 Prompt Cache",
+                    build_plan_chat_messages(bundle),
+                    note="真实 messages：system + 多条 user（项目上下文→衔接→检索→本章任务）",
                 )
             )
 
-    writer_user = build_writer_user_prompt(bundle, fix_instructions=fix_instructions)
     stages.append(
-        _stage(
+        _stage_from_messages(
             "writer",
             "正文撰写",
-            get_writer_system_prompt(domain),
-            writer_user,
-            note="实际请求按多条 user 消息分层发送（项目上下文→衔接→检索→本章任务），利于 Prompt Cache",
+            build_writer_chat_messages(
+                bundle,
+                fix_instructions=fix_instructions,
+                structured=WRITER_STRUCTURED_OUTPUT,
+            ),
+            note="真实 messages：system + 多条 user（项目上下文→衔接→检索→本章任务）",
         )
     )
 
@@ -223,11 +357,10 @@ def build_chapter_prompt_preview(
     if not qa_sample:
         qa_sample = "（预览占位：生成正文后将填入本章内容用于软质检）"
     stages.append(
-        _stage(
+        _stage_from_messages(
             "qa",
             "软质检",
-            QA_SYSTEM_PROMPT,
-            build_qa_user_prompt(qa_sample[:6000], bundle),
+            build_qa_chat_messages(qa_sample[:6000], bundle),
             note="软质检在正文生成后执行，预览时正文可能为占位或历史版本",
         )
     )
@@ -257,6 +390,7 @@ def capture_generation_prompt_debug(
     *,
     fix_instructions: str | None = None,
     content_for_qa: str | None = None,
+    project_id: str | None = None,
 ) -> str:
     """生成流程中保存的提示词快照（JSON 字符串）。"""
     guidance = bundle.get("guidance") or {}
@@ -278,41 +412,40 @@ def capture_generation_prompt_debug(
             )
         else:
             stages.append(
-                _stage(
+                _stage_from_messages(
                     "plan",
                     "写作规划",
-                    get_plan_system_prompt(domain),
-                    build_plan_user_prompt(bundle),
-                    note="实际请求按多条 user 消息分层发送（项目上下文→衔接→检索→本章任务），利于 Prompt Cache",
+                    build_plan_chat_messages(bundle),
+                    note="真实 messages：system + 多条 user（项目上下文→衔接→检索→本章任务）",
                 )
             )
 
-    writer_user = build_writer_user_prompt(bundle, fix_instructions=fix_instructions)
     stages.append(
-        _stage(
+        _stage_from_messages(
             "writer",
             "正文撰写",
-            get_writer_system_prompt(domain),
-            writer_user,
-            note="实际请求按多条 user 消息分层发送（项目上下文→衔接→检索→本章任务），利于 Prompt Cache",
+            build_writer_chat_messages(
+                bundle,
+                fix_instructions=fix_instructions,
+                structured=WRITER_STRUCTURED_OUTPUT,
+            ),
+            note="真实 messages：system + 多条 user（项目上下文→衔接→检索→本章任务）",
         )
     )
 
     if content_for_qa:
         stages.append(
-            _stage(
+            _stage_from_messages(
                 "qa",
                 "软质检",
-                QA_SYSTEM_PROMPT,
-                build_qa_user_prompt(content_for_qa[:6000], bundle),
+                build_qa_chat_messages(content_for_qa[:6000], bundle),
             )
         )
 
     stages, prompt_metrics = attach_stage_metrics(stages)
 
-    stages, prompt_metrics = attach_stage_metrics(stages)
-
     payload = {
+        "project_id": project_id,
         "chapter_id": chapter.id,
         "chapter_title": chapter.title,
         "guidance": {
@@ -332,6 +465,16 @@ def capture_generation_prompt_debug(
     route = bundle.get("retrieval_route")
     if isinstance(route, dict) and route:
         payload["retrieval_route"] = route
+    if "retrieval_hit_count" in bundle:
+        payload["retrieval_hit_count"] = int(bundle.get("retrieval_hit_count") or 0)
+    empty_reason = bundle.get("retrieval_empty_reason")
+    if empty_reason:
+        payload["retrieval_empty_reason"] = empty_reason
+
+    log_path = persist_prompt_log(payload, kind="chapter", project_id=project_id)
+    if log_path:
+        payload["log_path"] = log_path
+
     return json.dumps(payload, ensure_ascii=False)
 
 

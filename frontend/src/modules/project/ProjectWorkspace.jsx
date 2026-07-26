@@ -98,12 +98,10 @@ function ProjectWorkspace({
     confirmWizardInitRef.current = true;
     if (!globalsFilled) {
       setConfirmWizardStep(1);
-    } else if (stats.risk > 0 && stats.risk !== stats.riskConfirmed) {
-      setConfirmWizardStep(3);
     } else {
       setConfirmWizardStep(2);
     }
-  }, [currentPage, loadingProject, globalsFilled, stats.risk, stats.riskConfirmed]);
+  }, [currentPage, loadingProject, globalsFilled]);
 
   const loadWorkspaceMeta = useCallback(async (p) => {
     try {
@@ -325,40 +323,38 @@ function ProjectWorkspace({
   };
 
   const confirmWizardNextLabels = {
-    1: '下一步：资格审查',
-    2: '下一步：评分要求',
-    3: '下一步：商务与技术要求',
-    4: '核对无误，进入大纲策划',
+    1: '下一步：审查与评分',
+    2: '核对无误，进入大纲策划',
   };
 
   const confirmWizardExtras = {
-    1: globalsFilled ? '工程信息已完整，可进入资格审查' : '请填写并保存工程信息与投标人须知',
-    2: '请在右侧招标原文中逐条核对资格性与废标条款',
-    3: `已确认 ${stats.confirmed}/${stats.total}，刚性风险项 ${stats.riskConfirmed}/${stats.risk}`,
-    4: '补充商务/技术要求文本后，可进入大纲策划',
+    1: globalsFilled ? '工程信息已完整，可进入审查与评分' : '请填写并保存工程信息与投标人须知',
+    2: `已确认 ${stats.confirmed}/${stats.total}，刚性风险项 ${stats.riskConfirmed}/${stats.risk}`,
   };
 
   const confirmNextDisabled = useMemo(() => {
     if (currentPage !== 'confirm') return false;
     if (project.status === 'planning') return true;
     if (confirmWizardStep === 1) return !globalsFilled;
-    if (confirmWizardStep === 3) return stats.risk > 0 && stats.risk !== stats.riskConfirmed;
-    if (confirmWizardStep === 4) return !canConfirmAll;
+    if (confirmWizardStep === 2) {
+      if (stats.risk > 0 && stats.risk !== stats.riskConfirmed) return true;
+      return !canConfirmAll;
+    }
     return false;
   }, [currentPage, confirmWizardStep, globalsFilled, stats, canConfirmAll, project.status]);
 
   const confirmNextDisabledReason = useMemo(() => {
     if (currentPage !== 'confirm' || !confirmNextDisabled) return null;
     if (confirmWizardStep === 1) return confirmBlockReason;
-    if (confirmWizardStep === 3 && stats.risk > 0 && stats.risk !== stats.riskConfirmed) {
+    if (confirmWizardStep === 2 && stats.risk > 0 && stats.risk !== stats.riskConfirmed) {
       return `还有 ${stats.risk - stats.riskConfirmed} 个刚性风险项未确认，请在技术评分表格中逐一点击「确认」`;
     }
-    if (confirmWizardStep === 4) return confirmBlockReason;
+    if (confirmWizardStep === 2) return confirmBlockReason;
     return null;
   }, [currentPage, confirmNextDisabled, confirmWizardStep, confirmBlockReason, stats]);
 
   const goConfirmWizardNext = () => {
-    if (confirmWizardStep < 4) {
+    if (confirmWizardStep < 2) {
       setConfirmWizardStep((s) => s + 1);
       return;
     }
@@ -485,6 +481,21 @@ function ProjectWorkspace({
       {currentPage === 'confirm' && project.status !== 'draft' && (
         <div className="parse-dual-layout confirm-dual-layout">
           <Card
+            title="招标原文"
+            className="section-card parse-dual-left confirm-dual-preview"
+            variant="borderless"
+            style={{ marginTop: 0 }}
+          >
+            <div className="source-preview-card-body">
+              <SourcePreviewPane
+                projectId={project.id}
+                hasSource={!!project.has_source}
+                sourceType={project.source_type}
+                highlightTarget={sourceHighlight}
+              />
+            </div>
+          </Card>
+          <Card
             title="核对检查项"
             className="section-card parse-dual-right confirm-dual-form"
             variant="borderless"
@@ -505,21 +516,6 @@ function ProjectWorkspace({
               globalsFilled={globalsFilled}
               stats={stats}
             />
-          </Card>
-          <Card
-            title="招标原文"
-            className="section-card parse-dual-left confirm-dual-preview"
-            variant="borderless"
-            style={{ marginTop: 0 }}
-          >
-            <div className="source-preview-card-body">
-              <SourcePreviewPane
-                projectId={project.id}
-                hasSource={!!project.has_source}
-                sourceType={project.source_type}
-                highlightTarget={sourceHighlight}
-              />
-            </div>
           </Card>
         </div>
       )}
@@ -609,7 +605,7 @@ function ProjectWorkspace({
             : currentPage === 'outline' && !(outlineFooter.canWrite || (outlineFooter.locked && outlineFooter.statusReady))
               ? '请先生成编写思路'
               : null}
-          nextLoading={currentPage === 'confirm' && confirmWizardStep === 4
+          nextLoading={currentPage === 'confirm' && confirmWizardStep === 2
             ? confirming
             : currentPage === 'outline'
               ? outlineFooter.locking

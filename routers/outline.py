@@ -164,12 +164,15 @@ def update_generation_config_api(
         custom_word_count = updates.pop("custom_word_count", None)
         # generating/done 允许改展示配置，但不重算 target_words，避免冲掉已生成正文
         can_rescale = project.status in ALLOW_GENERATION_CONFIG_RESCALE
+        rescale_locked_fields: list[str] = []
 
         if target_pages is not None:
             # 不可重算时也不改 target_pages，避免「页数/估字」与章节 target_words 脱节
             if can_rescale:
                 set_meta(project, target_pages=int(target_pages))
                 reapply_outline_generation_mode(db, project)
+            else:
+                rescale_locked_fields.append("target_pages")
 
         if updates:
             update_generation_config(project, **updates)
@@ -183,13 +186,20 @@ def update_generation_config_api(
                     custom_word_count=True,
                     custom_total_words=int(custom_total_words),
                 )
+            else:
+                rescale_locked_fields.extend(["custom_word_count", "custom_total_words"])
         elif custom_word_count is False:
             if can_rescale:
                 update_generation_config(project, custom_word_count=False, custom_total_words=None)
                 reapply_outline_generation_mode(db, project)
+            else:
+                rescale_locked_fields.append("custom_word_count")
 
         db.commit()
-        return {"success": True, **_build_generation_payload(db, project)}
+        payload = {"success": True, **_build_generation_payload(db, project)}
+        if rescale_locked_fields:
+            payload["rescale_locked_fields"] = rescale_locked_fields
+        return payload
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 

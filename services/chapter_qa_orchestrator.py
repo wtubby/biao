@@ -36,6 +36,7 @@ from services.qa_rules import (
     check_heading_keyword_coverage,
     check_markdown_table_integrity,
     check_paragraph_opening_repetition,
+    check_opening_pattern_overuse,
     check_plan_key_points_coverage,
     check_scoring_coverage_in_content,
     check_stitch_cheat,
@@ -91,6 +92,7 @@ def run_hard_qa(
     errors.extend(check_descriptive_chapter_measures(content, chapter_title or ""))
     errors.extend(check_first_paragraph_repeats_title(content, chapter_title or ""))
     errors.extend(check_paragraph_opening_repetition(content))
+    errors.extend(check_opening_pattern_overuse(content))
     errors.extend(check_markdown_table_integrity(content))
     errors.extend(check_atomic_markdown_closure(content))
     errors.extend(check_ai_cliche_residues(content))

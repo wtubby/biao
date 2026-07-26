@@ -191,15 +191,59 @@ def update_generation_config(project: Project, **kwargs: Any) -> dict[str, Any]:
     return config
 
 
-def chart_density_hint(density: str) -> str:
+def chart_density_hint(
+    density: str,
+    *,
+    chapter_title: str | None = None,
+    content_boundary: str | None = None,
+) -> str:
+    from services.writing_guidance import get_chapter_type, is_descriptive_chapter
+
+    title = (chapter_title or "").strip()
+    boundary = (content_boundary or "").strip()
+    combined = f"{title} {boundary}"
+
+    # 描述类 / 范围定义：默认不插图，避免硬凑占位符
+    if density != CHART_DENSITY_NONE and (
+        is_descriptive_chapter(title)
+        or any(k in combined for k in ("设计范围", "工作范围", "范围界定", "范围定义", "工作界面"))
+    ):
+        return "本章以文字论述为主，一般不插入图表占位符；确有必要时最多 1 个 Markdown 表格。"
+
     if density == CHART_DENSITY_NONE:
         return "本章尽量不插入图表占位符，以文字论述为主。"
+
     if density == CHART_DENSITY_ABUNDANT:
+        if any(k in combined for k in ("进度", "计划", "工期", "网络")):
+            return (
+                "本章可多用进度类图表：优先 [GANTT_DATA] 与 Markdown 表格，"
+                "每章建议 1~2 处，避免堆砌组织架构图。"
+            )
+        if any(k in combined for k in ("组织", "机构", "人员", "岗位")):
+            return (
+                "本章可多用组织类图表：优先 [ORG_DATA]，辅以 Markdown 表格，"
+                "每章建议 1~2 处。"
+            )
+        if any(k in combined for k in ("工艺", "工序", "流程", "方案", "措施")):
+            return (
+                "本章可多用流程/工序类图表：优先 [FLOW_DATA] 与 Markdown 表格，"
+                "每章建议 1~2 处。"
+            )
         return (
             "在合适位置多使用图表占位符（甘特图、流程图、组织架构图、表格等），"
             "每章建议至少 1~2 处 [GANTT_DATA]、[FLOW_DATA]、[ORG_DATA] 或 Markdown 表格。"
         )
-    return "在关键工序、进度安排、组织架构等处适度插入 0~2 个图表占位符，避免堆砌。"
+
+    # normal：按章节语义收窄提示
+    if any(k in combined for k in ("进度", "计划", "工期", "网络", "甘特")):
+        return "在进度节点与关键路径处可插入 0~2 个 [GANTT_DATA] 或 Markdown 表格，避免堆砌。"
+    if any(k in combined for k in ("组织机构", "组织架构", "人员配置", "岗位职责")):
+        return "在组织层级与职责分工处可插入 0~1 个 [ORG_DATA]，避免堆砌。"
+    if any(k in combined for k in ("工艺", "工序", "流程", "吊装", "安装", "调试")):
+        return "在关键工序与工艺流程处可插入 0~2 个 [FLOW_DATA] 或 Markdown 表格，避免堆砌。"
+    if get_chapter_type(title) == "construction":
+        return "若确有可视化必要，可插入 0~1 个与本章边界直接相关的图表占位符；无必要则不插。"
+    return "本章以文字论述为主；非必要不插入图表占位符。"
 
 
 def list_bid_category_options() -> list[dict[str, str]]:
@@ -266,11 +310,30 @@ def smartart_hint(enabled: bool) -> str:
     )
 
 
-def build_generation_hints(gen_config: dict[str, Any]) -> dict[str, str]:
+def build_generation_hints(
+    gen_config: dict[str, Any],
+    *,
+    chapter_title: str | None = None,
+    content_boundary: str | None = None,
+) -> dict[str, str]:
     """汇总生成配置相关的提示词片段。"""
     density = gen_config.get("chart_density") or CHART_DENSITY_NORMAL
-    chart_parts = [chart_density_hint(density)]
-    smart = smartart_hint(bool(gen_config.get("smartart_enabled")))
+    chart_parts = [
+        chart_density_hint(
+            density,
+            chapter_title=chapter_title,
+            content_boundary=content_boundary,
+        )
+    ]
+    # 描述/范围类章节不追加 SmartArt 鼓动语
+    from services.writing_guidance import is_descriptive_chapter
+
+    title = (chapter_title or "").strip()
+    allow_smartart = bool(gen_config.get("smartart_enabled")) and not (
+        is_descriptive_chapter(title)
+        or any(k in title for k in ("设计范围", "工作范围", "范围界定", "范围定义"))
+    )
+    smart = smartart_hint(allow_smartart)
     if smart:
         chart_parts.append(smart)
     return {

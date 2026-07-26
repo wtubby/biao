@@ -3,7 +3,6 @@ from prompts.bundle_blocks import (
     format_retrieval_notes,
 )
 from prompts.context_blocks import (
-    format_facts_block,
     format_generation_extras,
     format_scope_constraints,
 )
@@ -89,7 +88,6 @@ def _qa_chapter_context_body(
     chapter_title = bundle.get("chapter_title", "未命名章节")
     chapter_path = bundle.get("chapter_path", "未知路径")
     empty_hint = format_retrieval_notes(bundle, inline=False)
-    facts_block = format_facts_block(bundle.get("global_facts_text") or "", style="qa")
 
     plan = bundle.get("content_plan") or {}
     plan_block = ""
@@ -108,7 +106,11 @@ def _qa_chapter_context_body(
     if prior_block and not prior_block.startswith("\n"):
         prior_block = "\n" + prior_block
 
-    extras_block = format_generation_extras(bundle, style="qa")
+    # 全局事实/写作惯例/盲标约束已在 cacheable project prefix 注入，此处跳过以免重复摊薄 token
+    extras_bundle = dict(bundle)
+    extras_bundle["standards_hint"] = ""
+    extras_bundle["blind_bid_constraints"] = ""
+    extras_block = format_generation_extras(extras_bundle, style="qa")
     req_hint = (bundle.get("requirements_hint") or "").strip()
     req_hint_block = f"\n{req_hint}\n" if req_hint else ""
     matrix_context = (bundle.get("matrix_context") or "").strip()
@@ -125,7 +127,7 @@ def _qa_chapter_context_body(
 {requirements_text}{req_hint_block}{matrix_block}{focus_block}
 检索素材与事实依据：
 {retrieval_text}
-{empty_hint}{facts_block}{plan_block}{prior_block}{extras_block}"""
+{empty_hint}{plan_block}{prior_block}{extras_block}"""
 
 
 def _qa_content_body(content: str) -> str:

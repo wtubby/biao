@@ -9,6 +9,7 @@ from services.qa_rules import (
     check_mandatory_elements,
     check_markdown_table_integrity,
     check_paragraph_opening_repetition,
+    check_opening_pattern_overuse,
     check_stitch_cheat,
     check_template_residues,
     check_truncation_risk,
@@ -193,6 +194,31 @@ def test_check_paragraph_opening_repetition_detects_three_same_openings():
     errs = check_paragraph_opening_repetition(content)
     assert errs
     assert "连续 3 段" in errs[0]
+
+
+def test_check_opening_pattern_overuse_detects_scattered_openings():
+    """散布式同头：连续 streak 抓不到，全篇统计应命中。"""
+    content = "\n\n".join([
+        "本工程采用标准化施工工艺，完成基础施工。",
+        "现场按分区组织作业，配置专职人员与机具。",
+        "本工程采用专项吊装方案，完成设备安装。",
+        "物资进场验收合格后方可投入使用。",
+        "本工程采用分区流水作业，完成电缆敷设。",
+    ])
+    assert not check_paragraph_opening_repetition(content)
+    errs = check_opening_pattern_overuse(content)
+    assert errs
+    assert "非连续" in errs[0]
+    assert "3 次" in errs[0]
+
+
+def test_check_opening_pattern_overuse_ignores_below_threshold():
+    content = "\n\n".join([
+        "本工程采用标准化施工工艺，完成基础施工。",
+        "现场按分区组织作业，配置专职人员与机具。",
+        "本工程采用专项吊装方案，完成设备安装。",
+    ])
+    assert not check_opening_pattern_overuse(content)
 
 
 def test_check_markdown_table_integrity_flags_column_mismatch():

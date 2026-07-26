@@ -37,6 +37,7 @@ from services.generation_config import normalize_custom_total_words, resolve_tar
 from services.writing_guidance import (
     default_content_boundary_for_title,
     get_chapter_type,
+    get_word_budget_weight,
     guidance_to_outline_dict,
     is_descriptive_chapter,
     normalize_style_tier,
@@ -160,6 +161,7 @@ def generate_outline_skeleton(
     reference_text: str,
     *,
     generation_mode: str = GENERATION_MODE_FULL,
+    project_id: str | None = None,
 ) -> list[dict]:
     domain = (global_info or {}).get("工程领域")
     messages = [
@@ -171,6 +173,13 @@ def generate_outline_skeleton(
             ),
         },
     ]
+    from services.prompt_debug_service import persist_messages_prompt_log
+    persist_messages_prompt_log(
+        kind="outline_skeleton",
+        label="大纲骨架",
+        messages=messages,
+        project_id=project_id,
+    )
     result = call_llm_json(
         messages,
         max_tokens=3000,
@@ -205,6 +214,7 @@ def _expand_branch(
     *,
     generation_mode: str = GENERATION_MODE_FULL,
     other_branches: list[dict] | None = None,
+    project_id: str | None = None,
 ) -> list[dict]:
     domain = (global_info or {}).get("工程领域")
     messages = [
@@ -218,6 +228,14 @@ def _expand_branch(
             ),
         },
     ]
+    from services.prompt_debug_service import persist_messages_prompt_log
+    persist_messages_prompt_log(
+        kind="outline_branch",
+        label=f"分支展开（{branch.get('title') or branch.get('id')}）",
+        messages=messages,
+        project_id=project_id,
+        extra={"branch_id": branch.get("id"), "branch_title": branch.get("title")},
+    )
     result = call_llm_json(
         messages,
         max_tokens=3000,
@@ -397,7 +415,9 @@ def generate_outline_ai(db: Session, project: Project) -> tuple[list[TechOutline
         project.id, generation_mode, len(req_dicts),
     )
     skeleton_nodes = generate_outline_skeleton(
-        global_info, catalog, reference_text, generation_mode=generation_mode,
+        global_info, catalog, reference_text,
+        generation_mode=generation_mode,
+        project_id=project.id,
     )
     level1_nodes = [n for n in skeleton_nodes if int(n.get("level") or 1) == 1]
     level2_nodes = [n for n in skeleton_nodes if int(n.get("level") or 1) == 2]
@@ -417,6 +437,7 @@ def generate_outline_ai(db: Session, project: Project) -> tuple[list[TechOutline
                 global_info, branch, catalog, req_dicts, knowledge_folders,
                 generation_mode=generation_mode,
                 other_branches=_other_branches_for_expand(level2_nodes, branch),
+                project_id=project.id,
             )
         except Exception as exc:
             logger.warning("分支「%s」展开失败，降级为单一叶子节点: %s", branch_title, exc)
@@ -536,6 +557,7 @@ def enrich_outline_nodes(
         unscored_base_words = 0
 
     enriched: list[dict] = []
+    pending_leaves: list[tuple[dict, int]] = []
     for node in nodes:
         item = dict(node)
         if not item.get("is_leaf"):
@@ -544,11 +566,31 @@ def enrich_outline_nodes(
             continue
 
         allocated = _allocated_words(item)
-        target_words = None
+        base_words = 0
         if allocated > 0:
-            target_words = scale_target_words(allocated, generation_mode)
+            base_words = allocated
         elif unscored_leaf_count > 0:
-            target_words = scale_target_words(unscored_base_words, generation_mode)
+            base_words = unscored_base_words
+
+        pending_leaves.append((item, base_words))
+
+    # 按章节类型加权后再归一化到原预算总和，避免范围/组织类被撑到过大篇幅
+    weighted_pairs: list[tuple[dict, float]] = []
+    raw_total = 0
+    weighted_total = 0.0
+    for item, base_words in pending_leaves:
+        raw_total += max(0, int(base_words or 0))
+        weight = get_word_budget_weight(item.get("title"))
+        weighted = max(0.0, float(base_words or 0) * weight)
+        weighted_pairs.append((item, weighted))
+        weighted_total += weighted
+
+    scale = (raw_total / weighted_total) if weighted_total > 0 else 1.0
+
+    for item, weighted in weighted_pairs:
+        target_words = None
+        if weighted > 0:
+            target_words = scale_target_words(int(round(weighted * scale)), generation_mode)
 
         brief = str(item.get("guidance_brief") or "").strip()
         boundary = str(item.get("content_boundary") or "").strip()
