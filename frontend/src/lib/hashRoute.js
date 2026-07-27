@@ -8,11 +8,19 @@ function normalizeHash(hash) {
   return raw.startsWith('#') ? raw : `#${raw}`;
 }
 
-/** @returns {{ view: 'list' } | { view: 'project', projectId: string, step: string|null }} */
+/**
+ * @returns {{ view: 'list' }
+ *   | { view: 'standards' }
+ *   | { view: 'project', projectId: string, step: string|null }}
+ */
 export function parseHashRoute(hash = window.location.hash) {
   const normalized = normalizeHash(hash).slice(1); // drop #
   const path = normalized.startsWith('/') ? normalized : `/${normalized}`;
   const parts = path.split('/').filter(Boolean);
+
+  if (parts[0] === 'standards') {
+    return { view: 'standards' };
+  }
 
   if (parts.length === 0 || (parts[0] === 'projects' && parts.length === 1)) {
     return { view: 'list' };
@@ -28,6 +36,9 @@ export function parseHashRoute(hash = window.location.hash) {
 }
 
 export function buildHashRoute(route = {}) {
+  if (route.view === 'standards') {
+    return '#/standards';
+  }
   if (route.view === 'project' && route.projectId) {
     const id = encodeURIComponent(route.projectId);
     if (route.step && STEP_SET.has(route.step)) {

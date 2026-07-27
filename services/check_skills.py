@@ -191,6 +191,9 @@ def _register_chapter_checks() -> None:
         scopes=("chapter", "segment"),
     )
     def _standards(ctx: ChapterCheckContext) -> list[Finding]:
+        from sqlalchemy.orm import object_session
+
+        db = object_session(ctx.project)
         domain = None
         if ctx.global_params and isinstance(ctx.global_params, dict):
             domain = ctx.global_params.get("engineering_domain")
@@ -199,7 +202,7 @@ def _register_chapter_checks() -> None:
 
             domain = get_meta(ctx.project).get("engineering_domain")
         items = collect_fabricated_standards(
-            ctx.content, ctx.allowed_standard_sources, domain=domain
+            ctx.content, ctx.allowed_standard_sources, domain=domain, db=db
         )
         return [
             Finding(
@@ -470,6 +473,32 @@ def _register_project_checks() -> None:
     def _run_disqualification(ctx: ProjectCheckContext) -> list[Finding]:
         return check_disqualification_risks(ctx.docx_text, ctx.qualification_items)
 
+    def _run_standards_currency(ctx: ProjectCheckContext) -> list[Finding]:
+        from sqlalchemy.orm import object_session
+        from services.project_meta import get_meta
+
+        db = object_session(ctx.project)
+        domain = get_meta(ctx.project).get("engineering_domain")
+        findings: list[Finding] = []
+        for ch in ctx.chapters:
+            content = ch.generated_content or ""
+            if not content.strip():
+                continue
+            for msg, code in collect_fabricated_standards(
+                content, None, domain=domain, db=db
+            ):
+                if "已废止" in msg or "已被" in msg:
+                    findings.append(
+                        Finding(
+                            check_id="project_standards_currency",
+                            category="standards_currency",
+                            severity="block",
+                            message=f"《{ch.title}》：{msg}",
+                            evidence=code,
+                        )
+                    )
+        return findings
+
     register_check(
         CheckSkill(
             check_id="project_template_residue",
@@ -550,6 +579,16 @@ def _register_project_checks() -> None:
             scopes=("project",),
             run_project=_run_disqualification,
             description="招标废标条款与正文风险对照",
+        )
+    )
+    register_check(
+        CheckSkill(
+            check_id="project_standards_currency",
+            category="standards_currency",
+            severity="block",
+            scopes=("project",),
+            run_project=_run_standards_currency,
+            description="全文档标准引用时效性体检",
         )
     )
 

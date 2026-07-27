@@ -44,6 +44,33 @@ logger = logging.getLogger(__name__)
 _KEY_CHAPTER_KEYWORDS = ("施工方案", "技术方案", "施工组织", "总体方案", "专项方案")
 
 
+def _resolve_recommended_standards(db: Session, domain: str | None, chapter_title: str) -> str:
+    if not domain:
+        return ""
+    from services.standards_service import list_standards
+
+    rows = list_standards(db, domain=domain, status="active")
+    if not rows:
+        return ""
+    title_kw = set(chapter_title or "")
+
+    def _score(r: dict) -> int:
+        return len(title_kw & set(r.get("title") or ""))
+
+    scored = sorted(rows, key=_score, reverse=True)[:8]
+    scored = [r for r in scored if _score(r) > 0] or rows[:5]
+    lines = [
+        f"- {r['raw_code']}《{r['title']}》"
+        + (f"：{r['summary']}" if r.get("summary") else "")
+        for r in scored
+    ]
+    return (
+        "本章可参考的现行有效标准（如需引用，务必使用准确编号与名称；"
+        "仅供参考，不要为了凑引用而生硬插入不相关的标准）：\n"
+        + "\n".join(lines)
+    )
+
+
 def _root_ancestor_id(node: TechOutline, node_map: dict[str, TechOutline]) -> str:
     current = node
     while current.parent_id and current.parent_id in node_map:
@@ -277,6 +304,7 @@ def build_context_bundle(
         brief=guidance.get("brief") or "",
         boundary=guidance.get("content_boundary") or "",
     )
+    recommended_standards_text = _resolve_recommended_standards(db, domain, chapter.title)
 
     blind = is_blind_bid(project)
     matrix_context = format_chapter_matrix_context(chapter, requirements, all_nodes)
@@ -326,6 +354,7 @@ def build_context_bundle(
         "other_leaf_titles": other_leaf_titles,
         **gen_hints,
         "standards_hint": standards_hint,
+        "recommended_standards_text": recommended_standards_text,
         "reference_bid_text": reference_bid_text,
         "reference_bid_miss": reference_bid_miss,
         "blind_bid": blind,

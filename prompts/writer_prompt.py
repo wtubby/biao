@@ -197,9 +197,11 @@ def _writer_chapter_task_body(bundle: dict) -> str:
     matrix_block = f"\n\n{matrix_context}\n" if matrix_context else ""
     evaluation_focus = (bundle.get("evaluation_focus") or "").strip()
     focus_block = f"\n\n{evaluation_focus}\n" if evaluation_focus else ""
+    recommended = (bundle.get("recommended_standards_text") or "").strip()
+    recommended_block = f"\n\n{recommended}\n" if recommended else ""
 
     base = f"""## 本章评分项
-{requirements_text}{req_hint_block}{matrix_block}{focus_block}
+{requirements_text}{req_hint_block}{matrix_block}{focus_block}{recommended_block}
 
 ## 章节定位
 标题：{chapter_title}

@@ -15,6 +15,7 @@ import { Icon } from './components/icons.jsx';
 import { EnvStatusBanner, WorkspaceBrand, WorkspaceSidebarFooter } from './components/layout.jsx';
 import { SettingsModal } from './components/SettingsModal.jsx';
 import { ProjectList } from './modules/project/ProjectList.jsx';
+import { StandardsPage } from './modules/standards/StandardsPage.jsx';
 
 const ProjectWorkspace = lazy(() =>
   import('./modules/project/ProjectWorkspace.jsx').then((m) => ({ default: m.ProjectWorkspace })),
@@ -39,6 +40,15 @@ function App() {
     setRouteStep(null);
     setView('list');
     const route = { view: 'list' };
+    if (replace) replaceHashRoute(route);
+    else pushHashRoute(route);
+  }, []);
+
+  const goToStandards = useCallback(({ replace = false } = {}) => {
+    setCurrentProject(null);
+    setRouteStep(null);
+    setView('standards');
+    const route = { view: 'standards' };
     if (replace) replaceHashRoute(route);
     else pushHashRoute(route);
   }, []);
@@ -69,6 +79,13 @@ function App() {
       return;
     }
 
+    if (route.view === 'standards') {
+      setCurrentProject(null);
+      setRouteStep(null);
+      setView('standards');
+      return;
+    }
+
     if (route.view !== 'project' || !route.projectId) {
       goToList({ replace: true });
       return;
@@ -95,6 +112,13 @@ function App() {
     let cancelled = false;
     (async () => {
       const route = getCurrentHashRoute();
+      if (route.view === 'standards') {
+        if (!cancelled) {
+          setView('standards');
+          setBootstrapping(false);
+        }
+        return;
+      }
       if (route.view === 'project' && route.projectId) {
         try {
           const p = await apiFetch(`/projects/${route.projectId}`);
@@ -136,31 +160,50 @@ function App() {
     );
   }
 
+  const sidebarSelected = view === 'standards' ? ['standards'] : ['projects'];
+
   return (
     <ConfigProvider locale={APP_LOCALE} theme={APP_THEME}>
       <EnvStatusBanner />
-      {view === 'list' ? (
+      {view === 'list' || view === 'standards' ? (
         <div className="workspace-layout workspace-layout--fullscreen">
           <div className="workspace-sidebar">
             <WorkspaceBrand />
             <Menu
               mode="inline"
-              selectedKeys={['projects']}
-              items={[{
-                key: 'projects',
-                label: (
-                  <span className="workspace-menu-label">
-                    <Icon name="list" size={15} />
-                    <span>项目列表</span>
-                  </span>
-                ),
-              }]}
+              selectedKeys={sidebarSelected}
+              onClick={({ key }) => {
+                if (key === 'standards') goToStandards();
+                else goToList();
+              }}
+              items={[
+                {
+                  key: 'projects',
+                  label: (
+                    <span className="workspace-menu-label">
+                      <Icon name="list" size={15} />
+                      <span>项目列表</span>
+                    </span>
+                  ),
+                },
+                {
+                  key: 'standards',
+                  label: (
+                    <span className="workspace-menu-label">
+                      <Icon name="clipboard" size={15} />
+                      <span>标准库管理</span>
+                    </span>
+                  ),
+                },
+              ]}
             />
             <WorkspaceSidebarFooter onOpenSettings={openSettings} />
           </div>
           <div className="workspace-main">
             <div className="workspace-main-scroll">
-              <ProjectList onSelect={enterProject} onCreate={enterProject} />
+              {view === 'standards'
+                ? <StandardsPage />
+                : <ProjectList onSelect={enterProject} onCreate={enterProject} />}
             </div>
           </div>
         </div>

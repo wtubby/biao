@@ -289,6 +289,58 @@ def test_check_fabricated_standards_detects_municipal_cjj():
     assert "CJJ" in errs[0].upper()
 
 
+def test_collect_fabricated_standards_db_withdrawn():
+    """标准库登记为废止时，应返回已废止提示。"""
+    import uuid
+
+    from db.database import SessionLocal, init_db
+    from services.qa_rules import collect_fabricated_standards, normalize_standard_core
+    from services.standards_service import upsert_standard
+
+    n = 70000 + (uuid.uuid4().int % 9999)
+    raw = f"GB/T {n}"
+    core = normalize_standard_core(raw)
+    init_db()
+    db = SessionLocal()
+    try:
+        upsert_standard(db, code=core, raw_code=raw, title="已废止测试标准", status="withdrawn")
+        items = collect_fabricated_standards(
+            f"施工执行 {raw}-1999。",
+            allowed_sources="仅含一般工艺说明",
+            db=db,
+        )
+        assert items
+        assert any("已废止" in msg for msg, _ in items)
+    finally:
+        db.close()
+
+
+def test_collect_fabricated_standards_db_active_not_fabricated():
+    """标准库已登记 active 且不在 allowed_sources 时，不再判为编造。"""
+    import uuid
+
+    from db.database import SessionLocal, init_db
+    from services.qa_rules import collect_fabricated_standards, normalize_standard_core
+    from services.standards_service import upsert_standard
+
+    n = 71000 + (uuid.uuid4().int % 9999)
+    raw = f"GB/T {n}"
+    core = normalize_standard_core(raw)
+    init_db()
+    db = SessionLocal()
+    try:
+        upsert_standard(db, code=core, raw_code=raw, title="已核实标准", status="active")
+        items = collect_fabricated_standards(
+            f"施工执行 {raw}-2020。",
+            allowed_sources="仅含一般工艺说明",
+            db=db,
+        )
+        assert not any(core == evidence for _, evidence in items)
+        assert not any("编造" in msg for msg, _ in items)
+    finally:
+        db.close()
+
+
 def test_check_plan_key_points_coverage_insufficient():
     from services.qa_rules import check_plan_key_points_coverage
 

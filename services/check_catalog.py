@@ -67,6 +67,12 @@ CHECK_CATEGORIES: dict[str, dict[str, Any]] = {
         "scope": ("chapter", "segment"),
         "description": "疑似虚构标准号",
     },
+    "standards_currency": {
+        "label": "标准时效性",
+        "default_severity": "block",
+        "scope": ("project",),
+        "description": "全文引用的规范标准是否现行有效",
+    },
     "truncation": {
         "label": "截断风险",
         "default_severity": "warn",

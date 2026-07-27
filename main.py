@@ -9,7 +9,7 @@ from starlette.requests import Request
 
 from config import get_cors_origins
 from db.database import init_db
-from routers import chart_preview, commercial, debug, export, facts, generate, knowledge, outline, parse, project, prompts, settings
+from routers import chart_preview, commercial, debug, export, facts, generate, knowledge, outline, parse, project, prompts, settings, standards
 from services.env_check import run_env_checks
 
 logging.basicConfig(
@@ -58,6 +58,7 @@ app.include_router(commercial.router)
 app.include_router(facts.router)
 app.include_router(knowledge.router)
 app.include_router(chart_preview.router)
+app.include_router(standards.router)
 
 
 @app.on_event("startup")

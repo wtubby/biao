@@ -752,14 +752,16 @@ def check_fabricated_standards(
     *,
     max_report: int = 5,
     domain: str | None = None,
+    db=None,
 ) -> list[str]:
     """正文中的规范标准号须出现在检索/事实等来源，或属于常见白名单。
 
     domain 对齐 domains.yaml 的 standard_prefixes，补充扫描该领域前缀
     （避免市政 CJJ 等漏检）；编造判定仍以来源命中为准，不按前缀白名单放行。
+    传入 db 时优先查标准库登记状态（废止/替代拦截，active/draft 放行）。
     """
     items = collect_fabricated_standards(
-        content, allowed_sources, domain=domain
+        content, allowed_sources, domain=domain, db=db
     )
     if not items:
         return []
@@ -776,8 +778,9 @@ def collect_fabricated_standards(
     allowed_sources: str | None,
     *,
     domain: str | None = None,
+    db=None,
 ) -> list[tuple[str, str]]:
-    """返回 (message, evidence_code) 列表，每条对应一个编造标准号。"""
+    """返回 (message, evidence_code) 列表，每条对应一个编造/违规标准号。"""
     from domains.registry import resolve_domain
 
     extra_prefixes = resolve_domain(domain).standard_prefixes if domain else None
@@ -786,9 +789,23 @@ def collect_fabricated_standards(
         return []
     allowed_compact = re.sub(r"[\s/]", "", (allowed_sources or "")).upper()
     allowed_compact = allowed_compact.replace("—", "-").replace("－", "-")
-    fabricated: list[str] = []
+
+    resolver = None
+    if db is not None:
+        from services.standards_service import resolve_standard
+
+        resolver = resolve_standard
+
+    fabricated: list[tuple[str, str]] = []
     for code in codes:
         core = normalize_standard_core(code)
+        ref = resolver(db, core) if resolver else None
+        if ref is not None:
+            if ref["status"] == "withdrawn":
+                fabricated.append((f"已废止标准，请勿引用：{code}（{ref['title']}）", core))
+            elif ref["status"] == "superseded":
+                fabricated.append((f"已被 {ref['superseded_by']} 替代：{code}（{ref['title']}）", core))
+            continue  # active / draft：已登记，放行
         if core in _COMMON_STANDARD_CORES:
             continue
         if core.startswith("QGDW") and "QGDW" in allowed_compact:
@@ -799,14 +816,8 @@ def collect_fabricated_standards(
         alt = core.replace("GBT", "GB", 1) if core.startswith("GBT") else "GBT" + core[2:]
         if alt in allowed_compact or alt in _COMMON_STANDARD_CORES:
             continue
-        fabricated.append(code)
-    return [
-        (
-            f"疑似编造规范标准号（未出现在检索素材/全局事实中）：{code}",
-            code,
-        )
-        for code in fabricated
-    ]
+        fabricated.append((f"疑似编造规范标准号（标准库未登记且未见于检索素材）：{code}", core))
+    return fabricated
 
 
 def check_plan_key_points_coverage(

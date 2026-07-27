@@ -172,3 +172,46 @@ class CommercialSection(Base):
     status: Mapped[str] = mapped_column(Text, default="draft")  # draft | confirmed
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+
+
+class StandardReference(Base):
+    __tablename__ = "standard_references"
+
+    code: Mapped[str] = mapped_column(Text, primary_key=True)
+    raw_code: Mapped[str] = mapped_column(Text)
+    title: Mapped[str] = mapped_column(Text, default="")
+    category: Mapped[str] = mapped_column(Text, default="国标")
+    issuing_body: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(Text, default="draft")  # draft/active/superseded/withdrawn
+    effective_date: Mapped[str | None] = mapped_column(Text, nullable=True)
+    superseded_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    key_clauses: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+
+
+class StandardDomainLink(Base):
+    __tablename__ = "standard_domain_links"
+
+    code: Mapped[str] = mapped_column(Text, primary_key=True)
+    domain_key: Mapped[str] = mapped_column(Text, primary_key=True)
+
+
+class StandardChunkLink(Base):
+    __tablename__ = "standard_chunk_links"
+
+    code: Mapped[str] = mapped_column(Text, primary_key=True)
+    chunk_id: Mapped[str] = mapped_column(Text, primary_key=True)
+
+
+class StandardChangeLog(Base):
+    __tablename__ = "standard_change_logs"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True, default=_uuid)
+    code: Mapped[str] = mapped_column(Text, index=True)
+    field: Mapped[str] = mapped_column(Text)
+    old_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    new_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    changed_at: Mapped[datetime] = mapped_column(DateTime, default=_now)

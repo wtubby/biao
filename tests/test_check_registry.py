@@ -165,3 +165,38 @@ def test_run_compliance_includes_findings_and_disqual_section():
         assert "检查分类汇总" in report["markdown"]
     finally:
         db.close()
+
+
+def test_fabricated_standards_check_passes_db_session(monkeypatch):
+    """_standards 经 object_session(ctx.project) 取得活跃 session，db 不为 None。"""
+    reset_registry_for_tests()
+    init_db()
+    db = SessionLocal()
+    captured: dict = {}
+
+    def _spy(content, allowed_sources, *, domain=None, db=None):
+        captured["db"] = db
+        return []
+
+    monkeypatch.setattr("services.check_skills.collect_fabricated_standards", _spy)
+    try:
+        pid = str(uuid.uuid4())
+        project = Project(id=pid, name="标准库会话", status="generating", duration_days=60)
+        db.add(project)
+        db.commit()
+        findings = run_chapter_checks(
+            ChapterCheckContext(
+                content="施工按 GB/T 99999-2099 执行。",
+                project=project,
+                requirements=[],
+                guidance={"target_words": 50},
+                chapter_title="施工方案",
+                allowed_standard_sources="",
+                scope="chapter",
+            )
+        )
+        assert captured.get("db") is not None
+        assert captured["db"] is db
+        assert findings is not None
+    finally:
+        db.close()
