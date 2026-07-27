@@ -64,10 +64,14 @@ app.include_router(chart_preview.router)
 def on_startup():
     init_db()
     from services.generation_service import recover_orphaned_generations
+    from services.parser_service import recover_orphaned_parsing
 
     recovered = recover_orphaned_generations()
     if recovered:
         logger.warning("启动时已恢复 %d 个卡在 generating 的项目", recovered)
+    recovered_parse = recover_orphaned_parsing()
+    if recovered_parse:
+        logger.warning("启动时已恢复 %d 个卡在 parsing 的项目", recovered_parse)
     checks = run_env_checks()
     logger.info("环境检查完成: %s", checks)
 

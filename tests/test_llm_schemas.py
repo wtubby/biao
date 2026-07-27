@@ -49,7 +49,7 @@ def test_qa_multi_window_result_merges_shape():
 def test_writer_output_schema_resolves_aliases():
     schema = WriterOutputSchema.model_validate({
         "content": "正文段落",
-        "charts": [{"type": "GANTT_DATA", "data": [{"工序": "A"}]}],
+        "charts": [{"type": "FLOW_DATA", "data": [{"from": "A", "to": "B"}]}],
     })
     assert schema.resolved_markdown() == "正文段落"
     assert len(schema.resolved_charts_raw()) == 1
@@ -59,7 +59,7 @@ def test_writer_output_schema_filters_invalid_chart_entries():
     schema = WriterOutputSchema.model_validate({
         "markdown_content": "正文",
         "embedded_charts": [
-            {"type": "GANTT_DATA", "data": []},
+            {"type": "FLOW_DATA", "data": []},
             "not-a-dict",
         ],
     })

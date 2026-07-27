@@ -8,7 +8,12 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from config import ENABLE_CONTENT_PLAN, MAX_QA_RETRY
+from config import (
+    ENABLE_CONTENT_PLAN,
+    MAX_CHAPTER_WRITER_LLM_CALLS,
+    MAX_QA_RETRY,
+    MAX_QA_RETRY_SEGMENTED,
+)
 from db.models import Project, TechOutline
 from services.chapter_context_service import (
     _enrich_retrieval_with_plan,
@@ -19,6 +24,8 @@ from services.chapter_context_service import (
 from services.chapter_generation_service import (
     _chunk_key_points,
     _should_segment_chapter,
+    _writer_budget_remaining,
+    build_directed_fix_instructions,
     generate_chapter_content,
     resolve_content_plan,
 )
@@ -38,6 +45,8 @@ from services.qa_rules import normalize_ai_spacing, trim_out_of_scope_content
 from services.chapter_review_errors import dump_review_errors, merge_review_errors
 
 logger = logging.getLogger(__name__)
+
+_BUDGET_EXHAUSTED_HINT = "已达质检重试上限，建议人工复核"
 
 
 def write_and_qa_chapter(
@@ -81,9 +90,23 @@ def write_and_qa_chapter(
 
         fix_instructions: str | None = None
         content = ""
-        qa_context: dict = {"project": project, "chapter": chapter, "segment_warnings": []}
+        qa_context: dict = {
+            "project": project,
+            "chapter": chapter,
+            "segment_warnings": [],
+            "writer_llm_calls": 0,
+            "writer_llm_budget": MAX_CHAPTER_WRITER_LLM_CALLS,
+            "fix_anchors": [],
+            "segment_parts": None,
+            "segment_groups": None,
+        }
+        is_segmented = _should_segment_chapter(bundle)
+        max_retry = MAX_QA_RETRY_SEGMENTED if is_segmented else MAX_QA_RETRY
+        # 非分段 + 非关键：附带上一版正文做定向修正。分段章靠按段复用喂单段原文；
+        # 关键章 use_chat 历史已含 assistant 草稿，避免整章重复塞入。
+        include_draft_on_retry = not is_segmented and not is_key
 
-        for attempt in range(MAX_QA_RETRY + 1):
+        for attempt in range(max_retry + 1):
             chapter.prompt_debug = capture_generation_prompt_debug(
                 bundle,
                 chapter,
@@ -108,15 +131,31 @@ def write_and_qa_chapter(
                 chapter,
                 bundle,
                 content_plan=bundle.get("content_plan"),
+                qa_context=qa_context,
+            )
+
+            budget_left = _writer_budget_remaining(qa_context)
+            can_retry = (
+                attempt < max_retry
+                and (budget_left is None or budget_left > 0)
+                and not qa_context.get("writer_budget_exhausted")
             )
 
             if hard_errors:
-                if attempt < MAX_QA_RETRY:
-                    fix_instructions = "修复以下问题：\n" + "\n".join(hard_errors)
+                if can_retry:
+                    fix_instructions = build_directed_fix_instructions(
+                        hard_errors,
+                        previous_draft=content if include_draft_on_retry else None,
+                    )
                     chapter.retry_count += 1
                     continue
+                final_errors = list(hard_errors)
+                if qa_context.get("writer_budget_exhausted") or (
+                    budget_left is not None and budget_left <= 0 and attempt < max_retry
+                ):
+                    final_errors.append(_BUDGET_EXHAUSTED_HINT)
                 _apply_qa_result_to_chapter(
-                    chapter, content, hard_errors=hard_errors, soft=None, refresh_summary=False,
+                    chapter, content, hard_errors=final_errors, soft=None, refresh_summary=False,
                 )
                 break
 
@@ -135,12 +174,24 @@ def write_and_qa_chapter(
                 chapter.generated_at = datetime.now(timezone.utc)
                 break
             if not soft.get("passed", True) and soft_issues:
-                if attempt < MAX_QA_RETRY:
-                    fix_instructions = "修复以下问题：\n" + "\n".join(soft_issues)
+                if can_retry:
+                    fix_instructions = build_directed_fix_instructions(
+                        soft_issues,
+                        previous_draft=content if include_draft_on_retry else None,
+                    )
                     chapter.retry_count += 1
                     continue
+                soft_out = dict(soft)
+                if qa_context.get("writer_budget_exhausted") or (
+                    budget_left is not None and budget_left <= 0 and attempt < max_retry
+                ):
+                    soft_out["coverage_issues"] = list(soft_issues) + [_BUDGET_EXHAUSTED_HINT]
+                    soft_out["faithfulness_issues"] = []
+                    soft_out["scope_issues"] = []
+                    soft_out["specificity_issues"] = []
+                    soft_out["passed"] = False
                 _apply_qa_result_to_chapter(
-                    chapter, content, hard_errors=[], soft=soft, refresh_summary=False,
+                    chapter, content, hard_errors=[], soft=soft_out, refresh_summary=False,
                 )
                 break
 

@@ -242,33 +242,6 @@ def normalize_gantt_data(data) -> list[dict]:
     return out
 
 
-def merge_gantt_payloads(payloads: list) -> list[dict]:
-    """合并多章甘特数据为一份整体工序列表（按工序名去重，保留先出现的）。"""
-    merged: list[dict] = []
-    seen: set[str] = set()
-    for payload in payloads:
-        for row in normalize_gantt_data(payload):
-            name = str(row.get("工序") or "")
-            if not name or name in seen:
-                continue
-            seen.add(name)
-            merged.append(row)
-    return merged
-
-
-def collect_gantt_payloads_from_text(content: str) -> list:
-    """从正文中提取全部 GANTT JSON 载荷。"""
-    payloads: list = []
-    for match in iter_chart_matches(content or ""):
-        if match.chart_type != "GANTT_DATA":
-            continue
-        try:
-            payloads.append(json.loads(match.raw_json))
-        except json.JSONDecodeError:
-            continue
-    return payloads
-
-
 def render_gantt(data: list[dict] | dict | None, duration: int | None = None) -> Path:
     """把工序列表渲染成横道图（甘特图）。data 每项含「工序」「开始第几天」「持续天数」。"""
     data = normalize_gantt_data(data)

@@ -276,13 +276,18 @@ def check_descriptive_chapter_measures(content: str, chapter_title: str) -> list
 
 
 def check_template_residues(text: str) -> list[str]:
-    hits: list[str] = []
+    return [msg for msg, _ in collect_template_residues(text)]
+
+
+def collect_template_residues(text: str) -> list[tuple[str, str]]:
+    """返回 (message, evidence) 列表。"""
+    hits: list[tuple[str, str]] = []
     for marker in TEMPLATE_RESIDUES:
         if marker in text:
-            hits.append(f"模板残留：{marker}")
+            hits.append((f"模板残留：{marker}", marker))
     for marker in ("XXX", "待定", "TBD", "○○○"):
         if marker in text:
-            hits.append(f"未替换标记：{marker}")
+            hits.append((f"未替换标记：{marker}", marker))
     return hits
 
 
@@ -753,6 +758,26 @@ def check_fabricated_standards(
     domain 对齐 domains.yaml 的 standard_prefixes，补充扫描该领域前缀
     （避免市政 CJJ 等漏检）；编造判定仍以来源命中为准，不按前缀白名单放行。
     """
+    items = collect_fabricated_standards(
+        content, allowed_sources, domain=domain
+    )
+    if not items:
+        return []
+    codes = [code for _, code in items]
+    shown = codes[:max_report]
+    extra = f" 等共 {len(codes)} 处" if len(codes) > max_report else ""
+    return [
+        f"疑似编造规范标准号（未出现在检索素材/全局事实中）：{', '.join(shown)}{extra}"
+    ]
+
+
+def collect_fabricated_standards(
+    content: str,
+    allowed_sources: str | None,
+    *,
+    domain: str | None = None,
+) -> list[tuple[str, str]]:
+    """返回 (message, evidence_code) 列表，每条对应一个编造标准号。"""
     from domains.registry import resolve_domain
 
     extra_prefixes = resolve_domain(domain).standard_prefixes if domain else None
@@ -775,12 +800,12 @@ def check_fabricated_standards(
         if alt in allowed_compact or alt in _COMMON_STANDARD_CORES:
             continue
         fabricated.append(code)
-    if not fabricated:
-        return []
-    shown = fabricated[:max_report]
-    extra = f" 等共 {len(fabricated)} 处" if len(fabricated) > max_report else ""
     return [
-        f"疑似编造规范标准号（未出现在检索素材/全局事实中）：{', '.join(shown)}{extra}"
+        (
+            f"疑似编造规范标准号（未出现在检索素材/全局事实中）：{code}",
+            code,
+        )
+        for code in fabricated
     ]
 
 
@@ -917,10 +942,22 @@ def check_global_fact_consistency(
     global_params: dict | None = None,
 ) -> list[str]:
     """正文与全局事实/工程参数的明显冲突检测。"""
+    return [msg for msg, _ in collect_global_fact_consistency(
+        content, facts_text=facts_text, global_params=global_params
+    )]
+
+
+def collect_global_fact_consistency(
+    content: str,
+    *,
+    facts_text: str | None = None,
+    global_params: dict | None = None,
+) -> list[tuple[str, str]]:
+    """返回 (message, evidence) 列表。"""
     text = content or ""
     if not text.strip():
         return []
-    errors: list[str] = []
+    errors: list[tuple[str, str]] = []
     params = global_params or {}
 
     location = str(params.get("建设地点") or "").strip()
@@ -938,7 +975,10 @@ def check_global_fact_consistency(
             ]
             if foreign:
                 errors.append(
-                    f"建设地点疑似不一致：全局为「{location}」，正文出现「{foreign[0]}」"
+                    (
+                        f"建设地点疑似不一致：全局为「{location}」，正文出现「{foreign[0]}」",
+                        foreign[0],
+                    )
                 )
                 break
 
@@ -953,7 +993,10 @@ def check_global_fact_consistency(
             for cm in _COUNT_RE.finditer(window):
                 if cm.group(2) == unit and cm.group(1) != num:
                     errors.append(
-                        f"全局事实冲突「{key}」：应为 {num}{unit}，正文出现 {cm.group(0)}"
+                        (
+                            f"全局事实冲突「{key}」：应为 {num}{unit}，正文出现 {cm.group(0)}",
+                            cm.group(0),
+                        )
                     )
                     break
             else:
@@ -1138,13 +1181,27 @@ def fallback_content_plan(bundle: dict) -> dict:
 
 def check_ai_cliche_residues(content: str, *, max_report: int = 5) -> list[str]:
     """硬质检：残留空泛套话（去痕后仍存在的需改写项）。"""
+    items = collect_ai_cliche_residues(content, max_report=max_report)
+    if not items:
+        return []
+    phrases = [ev for _, ev in items]
+    return [f"存在空泛套话，请改为具体技术表述：{', '.join(phrases)}"]
+
+
+def collect_ai_cliche_residues(
+    content: str, *, max_report: int = 5
+) -> list[tuple[str, str]]:
+    """返回 (message, evidence_phrase) 列表。"""
     from services.humanizer_service import detect_ai_cliches
 
     hits = detect_ai_cliches(content or "")
     if not hits:
         return []
     phrases = list(dict.fromkeys(h["phrase"] for h in hits))[:max_report]
-    return [f"存在空泛套话，请改为具体技术表述：{', '.join(phrases)}"]
+    return [
+        (f"存在空泛套话，请改为具体技术表述：{phrase}", phrase)
+        for phrase in phrases
+    ]
 
 
 def normalize_ai_spacing(text: str) -> str:

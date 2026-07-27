@@ -21,7 +21,7 @@ _PLAN_RULES = """在正式撰写章节之前，先制定一份详细的写作规
   "key_points": ["必须覆盖的要点1", "要点2"],
   "technical_methods": ["拟采用的主要工艺/方法"],
   "data_to_include": ["需要包含的关键技术数据/参数"],
-  "charts_needed": [{"type": "GANTT_DATA", "purpose": "用途说明"}],
+  "charts_needed": [{"type": "FLOW_DATA", "purpose": "用途说明"}],
   "word_count_target": 1000,
   "avoid": ["上一章已描述过的内容，本章不重复"],
   "retrieval_focus": ["用于二次检索的工艺/设备关键词"]
@@ -29,6 +29,7 @@ _PLAN_RULES = """在正式撰写章节之前，先制定一份详细的写作规
 
 word_count_target 须为整数，且与用户提示中「建议篇幅约 X 字」的 X 一致，勿套用示例数值。
 key_points 须覆盖本章每条评分项的「必备要素」（若有）及评分细则中的量化/管理要求；高分值项优先列入。
+charts_needed 不要规划 GANTT_DATA（全局施工进度横道图在文档末尾按总工期统一生成）；进度相关用文字或 Markdown 表格即可。
 请直接输出 JSON 字符串，不要包含任何 Markdown 代码块包裹（如 ```json）或前后导言。"""
 
 

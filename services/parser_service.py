@@ -6,6 +6,7 @@ from typing import Callable
 
 from sqlalchemy.orm import Session
 
+from db.database import SessionLocal
 from db.models import Project, TechRequirement
 from llm.llm_client import call_llm_json
 from prompts.extraction_prompt import build_extraction_chat_messages
@@ -47,6 +48,26 @@ EXTRACTION_TRUNCATION_HINT = (
     "2) requirements 数组不得省略条目；"
     "3) 长字段可精简 source_text 为关键句，但须保留评分项完整性。"
 )
+
+
+def recover_orphaned_parsing(db=None) -> int:
+    """清理崩溃/重启后残留的 parsing 状态，回退为 confirming 并写入错误提示。"""
+    own_session = db is None
+    if own_session:
+        db = SessionLocal()
+    try:
+        projects = db.query(Project).filter(Project.status == "parsing").all()
+        if not projects:
+            return 0
+        for project in projects:
+            project.status = "confirming"
+            set_parse_error(project, "解析在服务重启前中断，请重新上传招标文件")
+        db.commit()
+        return len(projects)
+    finally:
+        if own_session:
+            db.close()
+
 
 
 def _truncate(text: str, max_len: int) -> str:
@@ -215,16 +236,23 @@ def extract_with_llm(
 
 
 def _merge_fact_groups(target: list[dict], incoming: list[dict]) -> None:
-    titles = {str(item.get("title") or "").strip() for item in target}
+    by_title = {str(item.get("title") or "").strip(): item for item in target}
     for item in incoming:
         if not isinstance(item, dict):
             continue
         title = str(item.get("title") or "").strip()
         content = str(item.get("content") or "").strip()
-        if not title or not content or title in titles:
+        if not title or not content:
             continue
-        target.append({"title": title, "content": content})
-        titles.add(title)
+        existing = by_title.get(title)
+        if existing is None:
+            new_item = {"title": title, "content": content}
+            target.append(new_item)
+            by_title[title] = new_item
+            continue
+        # 同一分类的补充内容，去重后追加，而不是丢弃
+        if content not in existing["content"]:
+            existing["content"] = (existing["content"].rstrip("；;") + "；" + content).strip("；")
 
 
 def _parsed_full_text(parsed: ParsedContent) -> str:

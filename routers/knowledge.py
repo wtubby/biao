@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from db.database import SessionLocal, get_db
 from db.models import Project
 from services import knowledge_item_service as kis
-from services.background_jobs import spawn_sync
+from services.background_jobs import release_job, spawn_sync, try_acquire_job
 from services.project_meta import get_meta
 
 logger = logging.getLogger(__name__)
@@ -59,9 +59,27 @@ def process_folder(
     if detail["status"] == "processing":
         return {"status": "processing", "folder_path": folder_path}
 
-    domain = get_meta(project).get("engineering_domain")
-    kis.mark_folder_processing(folder_path, db)
-    spawn_sync(_run_extract, folder_path, domain)
+    # 先占槽再 mark/spawn，堵住双击窗口（与 generate.py 同模式）
+    job_key = f"knowledge-extract:{folder_path}"
+    if not try_acquire_job(job_key):
+        return {"status": "processing", "folder_path": folder_path}
+
+    try:
+        domain = get_meta(project).get("engineering_domain")
+        kis.mark_folder_processing(folder_path, db)
+        if not spawn_sync(
+            _run_extract,
+            folder_path,
+            domain,
+            name=f"knowledge-extract-{folder_path}",
+            dedupe_key=job_key,
+            already_acquired=True,
+        ):
+            release_job(job_key)
+            return {"status": "processing", "folder_path": folder_path}
+    except Exception:
+        release_job(job_key)
+        raise
     return {"status": "processing", "folder_path": folder_path}
 
 

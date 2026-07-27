@@ -247,3 +247,143 @@ def test_segmented_chapter_warns_when_segment_stays_empty(monkeypatch):
     assert "第1段" in content
     assert "第2段" not in content
     assert any("第2/2段" in w for w in qa_context["segment_warnings"])
+
+
+def test_localize_fix_to_segments_prefers_anchors():
+    from services.chapter_generation_service import _localize_fix_to_segments
+
+    parts = [
+        "第一段正常工艺说明。",
+        "第二段采用 GB/T 99999-2099 施工。",
+        "第三段验收要求。",
+    ]
+    hit = _localize_fix_to_segments(
+        parts,
+        anchors=["GB/T 99999-2099"],
+        fix_instructions="修复编造标准",
+    )
+    assert hit == [1]
+
+
+def test_segmented_chapter_reuses_unaffected_parts(monkeypatch):
+    from services.chapter_generation_service import _generate_segmented_chapter
+
+    calls: list[int] = []
+    captured_fix: list[str | None] = []
+
+    def fake_once(bundle, **kwargs):
+        seg_idx = int(bundle.get("_segment_index") or 1)
+        calls.append(seg_idx)
+        captured_fix.append(kwargs.get("fix_instructions"))
+        if seg_idx == 2:
+            return "第二段采用 GB/T 88888-2099 施工组织说明。", None
+        return f"第{seg_idx}段正常施工组织说明。", None
+
+    monkeypatch.setattr("services.chapter_generation_service._generate_once", fake_once)
+    monkeypatch.setattr("services.chapter_generation_service.ENABLE_SEGMENT_QA", False)
+
+    bundle = {
+        "content_plan": {
+            "key_points": ["要点一", "要点二", "要点三", "要点四"],
+        },
+        "guidance": {"target_words": 2000},
+    }
+    prev_bad = "第二段采用 GB/T 99999-2099 施工组织说明。"
+    qa_context = {
+        "segment_warnings": [],
+        "segment_parts": [
+            "第一段正常施工组织说明。",
+            prev_bad,
+        ],
+        "fix_anchors": ["GB/T 99999-2099"],
+    }
+    content, _ = _generate_segmented_chapter(
+        bundle,
+        chat_messages=None,
+        use_chat=False,
+        total_max_tokens=4000,
+        fix_instructions="修复以下问题：\n疑似编造规范标准号：GB/T 99999-2099",
+        qa_context=qa_context,
+    )
+    assert calls == [2]
+    assert "第一段正常" in content
+    assert "GB/T 88888-2099" in content
+    assert len(captured_fix) == 1
+    assert prev_bad in (captured_fix[0] or "")
+    assert "定向修正" in (captured_fix[0] or "")
+
+
+def test_build_directed_fix_instructions_with_and_without_draft():
+    from services.chapter_generation_service import build_directed_fix_instructions
+
+    plain = build_directed_fix_instructions(["问题A"])
+    assert plain == "修复以下问题：\n问题A"
+    assert "上一版" not in plain
+
+    directed = build_directed_fix_instructions(
+        ["问题A"],
+        previous_draft="上一版正文含问题A的句子。",
+    )
+    assert "上一版正文含问题A的句子。" in directed
+    assert "定向修正" in directed
+    assert "问题A" in directed
+
+
+def test_segmented_chapter_no_anchor_full_regen_single_attempt(monkeypatch):
+    from services.chapter_generation_service import _generate_segmented_chapter
+
+    calls: list[int] = []
+
+    def fake_once(bundle, **kwargs):
+        seg_idx = int(bundle.get("_segment_index") or 1)
+        calls.append(seg_idx)
+        return f"第{seg_idx}段重写后的施工说明。", None
+
+    monkeypatch.setattr("services.chapter_generation_service._generate_once", fake_once)
+    monkeypatch.setattr("services.chapter_generation_service.ENABLE_SEGMENT_QA", True)
+    monkeypatch.setattr("services.chapter_generation_service.MAX_SEGMENT_QA_RETRY", 2)
+    monkeypatch.setattr(
+        "services.chapter_generation_service.check_segment_stitch_quality",
+        lambda _parts: [],
+    )
+
+    bundle = {
+        "content_plan": {
+            "key_points": ["要点一", "要点二", "要点三", "要点四"],
+        },
+        "guidance": {"target_words": 2000},
+    }
+    qa_context = {
+        "segment_warnings": [],
+        "segment_parts": [
+            "第一段旧正文内容。",
+            "第二段旧正文内容。",
+        ],
+        "fix_anchors": [],
+    }
+    content, _ = _generate_segmented_chapter(
+        bundle,
+        chat_messages=None,
+        use_chat=False,
+        total_max_tokens=4000,
+        fix_instructions="修复以下问题：\n与前序章节内容重复偏高（约 25%）",
+        qa_context=qa_context,
+    )
+    # 无锚点全量重跑，但每段仅 1 次（不跑段内多重试）
+    assert calls == [1, 2]
+    assert "重写后的施工说明" in content
+
+
+def test_writer_budget_blocks_generate_once():
+    from services.chapter_generation_service import _generate_once
+
+    qa_context = {"writer_llm_calls": 2, "writer_llm_budget": 2}
+    content, _ = _generate_once(
+        {"guidance": {}},
+        max_tokens=100,
+        chat_messages=None,
+        use_chat=False,
+        qa_context=qa_context,
+    )
+    assert content == ""
+    assert qa_context.get("writer_budget_exhausted") is True

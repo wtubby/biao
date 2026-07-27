@@ -216,8 +216,8 @@ def chart_density_hint(
     if density == CHART_DENSITY_ABUNDANT:
         if any(k in combined for k in ("进度", "计划", "工期", "网络")):
             return (
-                "本章可多用进度类图表：优先 [GANTT_DATA] 与 Markdown 表格，"
-                "每章建议 1~2 处，避免堆砌组织架构图。"
+                "本章涉及进度内容以文字+Markdown 表格呈现即可，"
+                "不要输出 [GANTT_DATA]（全局横道图已在文档末尾统一生成）。"
             )
         if any(k in combined for k in ("组织", "机构", "人员", "岗位")):
             return (
@@ -230,13 +230,13 @@ def chart_density_hint(
                 "每章建议 1~2 处。"
             )
         return (
-            "在合适位置多使用图表占位符（甘特图、流程图、组织架构图、表格等），"
-            "每章建议至少 1~2 处 [GANTT_DATA]、[FLOW_DATA]、[ORG_DATA] 或 Markdown 表格。"
+            "在合适位置多使用图表占位符（流程图、组织架构图、表格等），"
+            "每章建议至少 1~2 处 [FLOW_DATA]、[ORG_DATA] 或 Markdown 表格，不要输出 [GANTT_DATA]。"
         )
 
     # normal：按章节语义收窄提示
     if any(k in combined for k in ("进度", "计划", "工期", "网络", "甘特")):
-        return "在进度节点与关键路径处可插入 0~2 个 [GANTT_DATA] 或 Markdown 表格，避免堆砌。"
+        return "进度节点用文字或 Markdown 表格说明即可，不要输出 [GANTT_DATA]（末尾已统一生成横道图）。"
     if any(k in combined for k in ("组织机构", "组织架构", "人员配置", "岗位职责")):
         return "在组织层级与职责分工处可插入 0~1 个 [ORG_DATA]，避免堆砌。"
     if any(k in combined for k in ("工艺", "工序", "流程", "吊装", "安装", "调试")):

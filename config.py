@@ -57,6 +57,10 @@ EMBEDDING_ENABLED = os.getenv("EMBEDDING_ENABLED", "1").lower() in ("1", "true",
 RETRIEVAL_RRF_K = int(os.getenv("RETRIEVAL_RRF_K", "60"))
 MIN_DIGIT_RATIO = float(os.getenv("MIN_DIGIT_RATIO", "0.5"))
 MAX_QA_RETRY = int(os.getenv("MAX_QA_RETRY", "2"))
+# 走内存分段的长章：外层整章重试次数（内层已有段级重试，外层宜更低）
+MAX_QA_RETRY_SEGMENTED = int(os.getenv("MAX_QA_RETRY_SEGMENTED", "1"))
+# 单章 Writer 生成调用硬上限（段内 + 外层 + stitch 共用）
+MAX_CHAPTER_WRITER_LLM_CALLS = int(os.getenv("MAX_CHAPTER_WRITER_LLM_CALLS", "8"))
 TARGET_PAGES_DEFAULT = int(os.getenv("TARGET_PAGES_DEFAULT", "40"))
 WORDS_PER_SCORE_PAGE = int(os.getenv("WORDS_PER_SCORE_PAGE", "780"))
 WORD_COUNT_MIN_RATIO = float(os.getenv("WORD_COUNT_MIN_RATIO", "0.75"))

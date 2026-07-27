@@ -12,7 +12,7 @@ from llm.schemas import WriterOutputSchema
 logger = logging.getLogger(__name__)
 
 VALID_CHART_TYPES = frozenset(
-    {"GANTT_DATA", "TIMELINE_DATA", "FLOW_DATA", "ORG_DATA", "SMART_DATA"}
+    {"TIMELINE_DATA", "FLOW_DATA", "ORG_DATA", "SMART_DATA"}
 )
 
 _CHART_MARKER_RE = re.compile(r"\[\[CHART:(\d+)\]\]", re.IGNORECASE)
@@ -20,7 +20,8 @@ _CHART_MARKER_RE = re.compile(r"\[\[CHART:(\d+)\]\]", re.IGNORECASE)
 _WRITER_OUTPUT_JSON_HINT = """【JSON 输出格式（必须严格遵守）】
 仅输出一个 JSON 对象，包含：
 - markdown_content：纯正文 Markdown，不含 # 标题行，不含图表 JSON 数据
-- embedded_charts：图表数组，每项含 type（GANTT_DATA/TIMELINE_DATA/FLOW_DATA/ORG_DATA/SMART_DATA）与 data（结构化数据）
+- embedded_charts：图表数组，每项含 type（TIMELINE_DATA/FLOW_DATA/ORG_DATA/SMART_DATA）与 data（结构化数据）
+  不要输出 GANTT_DATA（全局横道图在文档末尾按总工期统一生成）
 
 在 markdown_content 需要插图的位置写 [[CHART:0]]、[[CHART:1]]……下标与 embedded_charts 顺序对应。
 若无图表，embedded_charts 填空数组 []。"""
@@ -34,7 +35,7 @@ def format_chart_placeholder(chart_type: str, data: Any) -> str:
     """生成 chart_service 可解析的单行占位符。"""
     ctype = (chart_type or "").strip().upper()
     if ctype not in VALID_CHART_TYPES:
-        ctype = "GANTT_DATA"
+        ctype = "FLOW_DATA"
     payload = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
     return f"[{ctype}: {payload}]"
 

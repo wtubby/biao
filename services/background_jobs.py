@@ -3,6 +3,11 @@
 FastAPI/Starlette 的 BackgroundTasks 对 async 可调用对象会在主循环上 await；
 而本项目的 LLM/解析多为同步阻塞调用，挂在主循环上会导致整站 API 超时。
 同步任务走线程池，异步协程在独立线程中 asyncio.run。
+
+约定：任何会改同一业务实体（项目/文件夹等）的后台任务，应传 dedupe_key
+给 spawn_sync / spawn_async；若调用方需在 spawn 前做 DB/文件准备，先
+try_acquire_job，再以 already_acquired=True 交给 spawn（由 spawn finally
+release）。标准写法见 routers/generate.py。
 """
 
 from __future__ import annotations
@@ -44,16 +49,34 @@ def is_job_running(dedupe_key: str) -> bool:
         return dedupe_key in _running_keys
 
 
-def spawn_sync(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> None:
-    """在线程池中执行同步后台任务。"""
+def spawn_sync(
+    fn: Callable[..., Any],
+    *args: Any,
+    name: str = "sync-job",
+    dedupe_key: str | None = None,
+    already_acquired: bool = False,
+    **kwargs: Any,
+) -> bool:
+    """在线程池中执行同步后台任务。dedupe_key 非空且已被占用时跳过，返回 False。
+
+    already_acquired=True 表示调用方已通过 try_acquire_job 占槽，此处只负责收尾释放。
+    """
+    if dedupe_key is not None and not already_acquired:
+        if not try_acquire_job(dedupe_key):
+            logger.warning("跳过重复后台任务: %s (key=%s)", name, dedupe_key)
+            return False
 
     def _wrapper() -> None:
         try:
             fn(*args, **kwargs)
         except Exception:
-            logger.exception("后台同步任务失败: %s", getattr(fn, "__name__", repr(fn)))
+            logger.exception("后台同步任务失败: %s", name)
+        finally:
+            if dedupe_key is not None:
+                release_job(dedupe_key)
 
     _executor.submit(_wrapper)
+    return True
 
 
 def spawn_async(

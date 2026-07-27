@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from config import UPLOAD_DIR
 from db.database import SessionLocal, get_db
 from db.models import Project, TechRequirement
-from services.background_jobs import spawn_sync
+from services.background_jobs import release_job, spawn_sync, try_acquire_job
 from services.generation_config import TARGET_PAGES_MAX, TARGET_PAGES_MIN
 from services.parser_service import process_upload
 from services.project_meta import (
@@ -112,6 +112,10 @@ class TenderDetailUpdate(BaseModel):
     commerce_scores: list[CommerceScoreUpdate] | None = None
 
 
+def _parse_job_key(project_id: str) -> str:
+    return f"parse:{project_id}"
+
+
 def _run_parse_background(project_id: str, file_path: str):
     db = SessionLocal()
     project = None
@@ -144,23 +148,41 @@ async def upload_document(
     if suffix not in (".pdf", ".docx"):
         raise HTTPException(status_code=400, detail="仅支持 PDF 和 DOCX 格式")
 
-    upload_dir = Path(UPLOAD_DIR) / project_id
-    upload_dir.mkdir(parents=True, exist_ok=True)
-    save_path = upload_dir / f"source{suffix}"
-    # 避免 PDF/DOCX 并存时预览取到旧文件
-    for other in ("source.pdf", "source.docx"):
-        other_path = upload_dir / other
-        if other_path != save_path and other_path.is_file():
-            other_path.unlink(missing_ok=True)
+    # 先占槽再写文件/commit，堵住 commit→spawn 竞态（与 generate.py 同模式）
+    job_key = _parse_job_key(project_id)
+    if not try_acquire_job(job_key):
+        raise HTTPException(status_code=409, detail="该项目正在解析中，请稍候")
 
-    with open(save_path, "wb") as f:
-        shutil.copyfileobj(file.file, f)
+    try:
+        upload_dir = Path(UPLOAD_DIR) / project_id
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        save_path = upload_dir / f"source{suffix}"
+        # 避免 PDF/DOCX 并存时预览取到旧文件
+        for other in ("source.pdf", "source.docx"):
+            other_path = upload_dir / other
+            if other_path != save_path and other_path.is_file():
+                other_path.unlink(missing_ok=True)
 
-    project.status = "parsing"
-    set_parse_progress(project, PARSE_STAGE_READING, "文件已上传，正在阅读文档…")
-    db.commit()
+        with open(save_path, "wb") as f:
+            shutil.copyfileobj(file.file, f)
 
-    spawn_sync(_run_parse_background, project_id, str(save_path))
+        project.status = "parsing"
+        set_parse_progress(project, PARSE_STAGE_READING, "文件已上传，正在阅读文档…")
+        db.commit()
+
+        if not spawn_sync(
+            _run_parse_background,
+            project_id,
+            str(save_path),
+            name=f"parse-{project_id}",
+            dedupe_key=job_key,
+            already_acquired=True,
+        ):
+            release_job(job_key)
+            raise HTTPException(status_code=409, detail="该项目正在解析中，请稍候")
+    except Exception:
+        release_job(job_key)
+        raise
 
     return {"success": True, "message": "文件已上传，正在后台解析", "project_id": project_id}
 

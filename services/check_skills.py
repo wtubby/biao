@@ -14,7 +14,6 @@ from services.check_registry import (
     wrap_message_check,
 )
 from services.qa_rules import (
-    check_ai_cliche_residues,
     check_ai_spacing,
     check_atomic_markdown_closure,
     check_blind_bid_residues,
@@ -22,10 +21,8 @@ from services.qa_rules import (
     check_chapter_scope,
     check_cross_chapter_overlap,
     check_descriptive_chapter_measures,
-    check_fabricated_standards,
     check_first_paragraph_repeats_title,
     check_font_safety,
-    check_global_fact_consistency,
     check_heading_keyword_coverage,
     check_markdown_table_integrity,
     check_opening_pattern_overuse,
@@ -33,8 +30,11 @@ from services.qa_rules import (
     check_plan_key_points_coverage,
     check_scoring_coverage_in_content,
     check_stitch_cheat,
-    check_template_residues,
     check_truncation_risk,
+    collect_ai_cliche_residues,
+    collect_fabricated_standards,
+    collect_global_fact_consistency,
+    collect_template_residues,
     split_keywords,
 )
 from services.writing_guidance import is_descriptive_chapter
@@ -117,8 +117,17 @@ def _register_chapter_checks() -> None:
         severity="block",
         scopes=("chapter", "segment"),
     )
-    def _template(ctx: ChapterCheckContext) -> list[str]:
-        return check_template_residues(ctx.content)
+    def _template(ctx: ChapterCheckContext) -> list[Finding]:
+        return [
+            Finding(
+                check_id="template_residue",
+                category="template_residue",
+                severity="block",
+                message=msg,
+                evidence=evidence,
+            )
+            for msg, evidence in collect_template_residues(ctx.content)
+        ]
 
     @wrap_message_check("blind_bid", "blind_bid", severity="block", scopes=("chapter",))
     def _blind(ctx: ChapterCheckContext) -> list[str]:
@@ -163,8 +172,17 @@ def _register_chapter_checks() -> None:
         return check_atomic_markdown_closure(ctx.content)
 
     @wrap_message_check("ai_cliche", "ai_cliche", scopes=("chapter",))
-    def _cliche(ctx: ChapterCheckContext) -> list[str]:
-        return check_ai_cliche_residues(ctx.content)
+    def _cliche(ctx: ChapterCheckContext) -> list[Finding]:
+        return [
+            Finding(
+                check_id="ai_cliche",
+                category="ai_cliche",
+                severity="warn",
+                message=msg,
+                evidence=evidence,
+            )
+            for msg, evidence in collect_ai_cliche_residues(ctx.content)
+        ]
 
     @wrap_message_check(
         "fabricated_standards",
@@ -172,7 +190,7 @@ def _register_chapter_checks() -> None:
         severity="block",
         scopes=("chapter", "segment"),
     )
-    def _standards(ctx: ChapterCheckContext) -> list[str]:
+    def _standards(ctx: ChapterCheckContext) -> list[Finding]:
         domain = None
         if ctx.global_params and isinstance(ctx.global_params, dict):
             domain = ctx.global_params.get("engineering_domain")
@@ -180,17 +198,36 @@ def _register_chapter_checks() -> None:
             from services.project_meta import get_meta
 
             domain = get_meta(ctx.project).get("engineering_domain")
-        return check_fabricated_standards(
+        items = collect_fabricated_standards(
             ctx.content, ctx.allowed_standard_sources, domain=domain
         )
+        return [
+            Finding(
+                check_id="fabricated_standards",
+                category="fabricated_standards",
+                severity="block",
+                message=msg,
+                evidence=evidence,
+            )
+            for msg, evidence in items[:5]
+        ]
 
     @wrap_message_check("fact_consistency", "fact_consistency", scopes=("chapter",))
-    def _facts(ctx: ChapterCheckContext) -> list[str]:
-        return check_global_fact_consistency(
-            ctx.content,
-            facts_text=ctx.facts_text,
-            global_params=ctx.global_params,
-        )
+    def _facts(ctx: ChapterCheckContext) -> list[Finding]:
+        return [
+            Finding(
+                check_id="fact_consistency",
+                category="fact_consistency",
+                severity="warn",
+                message=msg,
+                evidence=evidence,
+            )
+            for msg, evidence in collect_global_fact_consistency(
+                ctx.content,
+                facts_text=ctx.facts_text,
+                global_params=ctx.global_params,
+            )
+        ]
 
     @wrap_message_check("cross_chapter", "cross_chapter", scopes=("chapter",))
     def _cross(ctx: ChapterCheckContext) -> list[str]:

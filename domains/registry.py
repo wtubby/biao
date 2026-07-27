@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from functools import lru_cache
 from pathlib import Path
 
 import yaml
@@ -13,6 +12,9 @@ from config import BASE_DIR
 DEFAULT_DOMAIN = "电力工程"
 
 _REGISTRY_PATH = Path(BASE_DIR) / "domains" / "domains.yaml"
+
+_cache: dict[str, DomainSpec] | None = None
+_cache_mtime: float | None = None
 
 
 @dataclass(frozen=True)
@@ -34,9 +36,7 @@ def _fallback_identity(domain: str) -> str:
     )
 
 
-@lru_cache(maxsize=1)
-def load_domains() -> dict[str, DomainSpec]:
-    raw = yaml.safe_load(_REGISTRY_PATH.read_text(encoding="utf-8")) or {}
+def _parse_domains(raw: dict) -> dict[str, DomainSpec]:
     result: dict[str, DomainSpec] = {}
     for item in raw.get("domains") or []:
         if not isinstance(item, dict) or not item.get("key"):
@@ -65,6 +65,18 @@ def load_domains() -> dict[str, DomainSpec]:
             guide_file="电力EPC技术标写作指南.md",
             standard_prefixes=["GB", "DL", "QGDW", "JGJ", "NB"],
         )
+    return result
+
+
+def load_domains() -> dict[str, DomainSpec]:
+    """按 domains.yaml 的 mtime 缓存；文件变更后下次调用自动重载。"""
+    global _cache, _cache_mtime
+    mtime = _REGISTRY_PATH.stat().st_mtime
+    if _cache is not None and _cache_mtime == mtime:
+        return _cache
+    raw = yaml.safe_load(_REGISTRY_PATH.read_text(encoding="utf-8")) or {}
+    result = _parse_domains(raw if isinstance(raw, dict) else {})
+    _cache, _cache_mtime = result, mtime
     return result
 
 
@@ -100,4 +112,7 @@ def list_domain_keys() -> list[dict[str, str]]:
 
 
 def clear_domain_cache() -> None:
-    load_domains.cache_clear()
+    """强制丢弃缓存（测试或显式刷新）；正常热更新依赖 mtime 即可。"""
+    global _cache, _cache_mtime
+    _cache = None
+    _cache_mtime = None

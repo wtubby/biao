@@ -10,9 +10,8 @@ from docx.shared import Pt, RGBColor
 
 from chart.chart_service import (
     CHART_PATTERN,
-    collect_gantt_payloads_from_text,
-    merge_gantt_payloads,
     next_caption,
+    normalize_gantt_data,
     parse_chart_match,
     render_flow,
     render_gantt,
@@ -22,7 +21,9 @@ from chart.chart_service import (
 )
 from config import OUTPUT_DIR
 from db.models import Project, TechOutline
+from llm.llm_client import call_llm_json
 from services.blind_bid_service import anonymize_cover_meta, blind_header_text, is_blind_bid
+from services.duration_text import parse_duration_days_from_text
 from services.outline_order import sort_outline_tree_dfs
 from services.typesetting_config import (
     TypesettingNumbering,
@@ -117,12 +118,11 @@ def _insert_chart(
     doc: Document, match: re.Match, temp_files: list[Path], duration: int, counters: dict
 ) -> None:
     chart_type, raw_json = parse_chart_match(match)
+    if chart_type == "GANTT_DATA":
+        return  # 章节内不再渲染横道图，末尾统一生成
     try:
         data = json.loads(raw_json)
-        if chart_type == "GANTT_DATA":
-            img = render_gantt(data, duration)
-            _insert_chart_image(doc, img, Pt(450), temp_files, counters, chart_type)
-        elif chart_type == "TIMELINE_DATA":
+        if chart_type == "TIMELINE_DATA":
             img = render_timeline(data)
             _insert_chart_image(doc, img, Pt(400), temp_files, counters, chart_type)
         elif chart_type == "FLOW_DATA":
@@ -305,22 +305,55 @@ def _write_content_in_order(
     _write_text_block(doc, content[last_end:], chapter_level)
 
 
-def _collect_gantt_payloads(chapters: list[TechOutline]) -> list:
-    payloads: list = []
-    for ch in chapters:
-        payloads.extend(collect_gantt_payloads_from_text(ch.generated_content or ""))
-    return payloads
+def _resolve_master_gantt_duration(project: Project) -> int:
+    """优先用项目字段工期，否则从招标详情 duration_text 解析，默认 180。"""
+    if project.duration_days:
+        return int(project.duration_days)
+    try:
+        from services.tender_detail_service import get_tender_detail
+
+        notice = get_tender_detail(project).get("notice") or {}
+        parsed = parse_duration_days_from_text(notice.get("duration_text"))
+        if parsed:
+            return parsed
+    except Exception:
+        pass
+    return 180
+
+
+def _generate_master_gantt(project: Project, chapters: list[TechOutline]) -> list[dict] | None:
+    """按总工期 + 大纲一级章节生成唯一一份整体施工进度横道图数据。"""
+    duration_days = _resolve_master_gantt_duration(project)
+    top_sections = [c.title for c in chapters if c.parent_id is None or c.level == 1][:12]
+    if not top_sections:
+        return None
+    prompt = (
+        f"根据以下工程总工期与主要工作阶段，生成一份施工总进度横道图数据（JSON 数组）。\n"
+        f"总工期：{duration_days} 个日历天。\n"
+        f"主要阶段（按顺序，可合并/拆分为合理的施工阶段，不要求逐一对应）：\n"
+        + "\n".join(f"- {t}" for t in top_sections)
+        + "\n\n输出格式：[{\"工序\": \"...\", \"开始第几天\": 1, \"持续天数\": 10}, ...]，"
+        "各阶段时间需覆盖整个总工期、首尾衔接合理，只输出 JSON 数组本身。"
+    )
+    try:
+        raw = call_llm_json([{"role": "user", "content": prompt}])
+        data = raw if isinstance(raw, list) else (raw.get("tasks") or raw.get("data") or [])
+        return normalize_gantt_data(data) or None
+    except Exception as exc:
+        logger.warning("整体进度横道图生成失败: %s", exc)
+        return None
 
 
 def _append_document_gantt(
     doc: Document,
-    payloads: list,
+    project: Project,
+    chapters: list[TechOutline],
     duration: int,
     temp_files: list[Path],
     counters: dict,
 ) -> None:
-    """全文末尾插入合并后的整体施工进度横道图。"""
-    merged = merge_gantt_payloads(payloads)
+    """全文末尾插入按总工期统一生成的整体施工进度横道图。"""
+    merged = _generate_master_gantt(project, chapters)
     if not merged:
         return
     doc.add_page_break()
@@ -389,7 +422,6 @@ def assemble_document(
     typesetting = get_typesetting(project)
     heading_numbering = TypesettingNumbering(doc, typesetting)
     emit_levels = _compute_heading_emit_levels(chapters)
-    gantt_payloads = _collect_gantt_payloads(chapters)
     temp_files: list[Path] = []
     duration = project.duration_days or 90
     counters: dict = {}
@@ -420,7 +452,7 @@ def assemble_document(
                     doc, content, emit_level, temp_files, duration, counters, skip_gantt=True,
                 )
 
-        _append_document_gantt(doc, gantt_payloads, duration, temp_files, counters)
+        _append_document_gantt(doc, project, chapters, duration, temp_files, counters)
 
         apply_typesetting_styles(doc, typesetting)
         enable_auto_update_fields(doc)

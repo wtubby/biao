@@ -121,14 +121,30 @@ def wrap_message_check(
     scopes: tuple[str, ...] = ("chapter",),
     description: str = "",
 ):
-    """把返回 list[str] 的规则函数注册为章级 CheckSkill。"""
+    """把返回 list[str] 或 list[Finding] 的规则函数注册为章级 CheckSkill。"""
 
-    def decorator(fn: Callable[[ChapterCheckContext], list[str]]):
+    def decorator(fn: Callable[[ChapterCheckContext], list]):
         sev = severity or category_default_severity(category)
 
         def _run(ctx: ChapterCheckContext) -> list[Finding]:
+            raw = fn(ctx) or []
+            if raw and isinstance(raw[0], Finding):
+                out: list[Finding] = []
+                for item in raw:
+                    if not isinstance(item, Finding):
+                        continue
+                    out.append(
+                        Finding(
+                            check_id=item.check_id or check_id,
+                            category=item.category or category,
+                            severity=item.severity or sev,
+                            message=item.message,
+                            evidence=item.evidence or "",
+                        )
+                    )
+                return out
             return _messages_to_findings(
-                fn(ctx),
+                raw,
                 check_id=check_id,
                 category=category,
                 severity=sev,

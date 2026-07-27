@@ -109,9 +109,55 @@ def test_spawn_async_already_acquired_releases_on_finish():
     assert is_job_running(key) is False
 
 
+def test_spawn_sync_dedupe_key_skips_duplicate():
+    release = threading.Event()
+    started = threading.Event()
+    runs = {"n": 0}
+
+    def job():
+        runs["n"] += 1
+        started.set()
+        release.wait()
+
+    key = "sync:dedupe-test"
+    release_job(key)
+
+    assert spawn_sync(job, name="a", dedupe_key=key) is True
+    assert started.wait(timeout=2)
+    assert spawn_sync(job, name="b", dedupe_key=key) is False
+
+    release.set()
+    deadline = time.time() + 2
+    while key in background_jobs._running_keys and time.time() < deadline:
+        time.sleep(0.01)
+
+    assert runs["n"] == 1
+    assert spawn_sync(job, name="c", dedupe_key=key) is True
+    deadline = time.time() + 2
+    while key in background_jobs._running_keys and time.time() < deadline:
+        time.sleep(0.01)
+
+
+def test_spawn_sync_already_acquired_releases_on_finish():
+    key = "sync:preacquired"
+    release_job(key)
+    assert try_acquire_job(key) is True
+    done = threading.Event()
+
+    def job():
+        done.set()
+
+    assert spawn_sync(job, name="pre", dedupe_key=key, already_acquired=True) is True
+    assert done.wait(timeout=2)
+    deadline = time.time() + 2
+    while is_job_running(key) and time.time() < deadline:
+        time.sleep(0.01)
+    assert is_job_running(key) is False
+
+
 def test_spawn_sync_swallows_exceptions():
     def boom():
         raise RuntimeError("expected")
 
-    spawn_sync(boom)
+    assert spawn_sync(boom, name="boom") is True
     time.sleep(0.05)

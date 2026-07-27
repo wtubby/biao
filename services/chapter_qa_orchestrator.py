@@ -13,11 +13,43 @@ from services.chapter_generation_service import generate_summary
 from services.chapter_review_errors import dump_review_errors
 from services.check_registry import (
     ChapterCheckContext,
+    Finding,
     findings_to_messages,
     run_chapter_checks,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _build_chapter_check_context(
+    content: str,
+    project: Project,
+    requirements: list[TechRequirement],
+    guidance: dict | None = None,
+    chapter_title: str | None = None,
+    other_leaf_titles: list[str] | None = None,
+    *,
+    allowed_standard_sources: str | None = None,
+    content_plan: dict | None = None,
+    facts_text: str | None = None,
+    global_params: dict | None = None,
+    prior_contents: list[str] | None = None,
+    scope: str = "chapter",
+) -> ChapterCheckContext:
+    return ChapterCheckContext(
+        content=content,
+        project=project,
+        requirements=requirements or [],
+        guidance=guidance,
+        chapter_title=chapter_title,
+        other_leaf_titles=other_leaf_titles,
+        allowed_standard_sources=allowed_standard_sources,
+        content_plan=content_plan,
+        facts_text=facts_text,
+        global_params=global_params,
+        prior_contents=prior_contents,
+        scope=scope,
+    )
 
 
 def run_hard_qa(
@@ -34,15 +66,15 @@ def run_hard_qa(
     global_params: dict | None = None,
     prior_contents: list[str] | None = None,
 ) -> list[str]:
-    """章级硬质检：经 CheckSkill 注册表执行，返回兼容的字符串错误列表。"""
+    """章级硬质检：只有 block 级发现才视为必须重写的硬错误。"""
     findings = run_chapter_checks(
-        ChapterCheckContext(
-            content=content,
-            project=project,
-            requirements=requirements or [],
-            guidance=guidance,
-            chapter_title=chapter_title,
-            other_leaf_titles=other_leaf_titles,
+        _build_chapter_check_context(
+            content,
+            project,
+            requirements,
+            guidance,
+            chapter_title,
+            other_leaf_titles,
             allowed_standard_sources=allowed_standard_sources,
             content_plan=content_plan,
             facts_text=facts_text,
@@ -51,7 +83,41 @@ def run_hard_qa(
             scope="chapter",
         )
     )
-    return findings_to_messages(findings)
+    hard = [f for f in findings if f.severity == "block"]
+    return findings_to_messages(hard)
+
+
+def run_hard_qa_all_findings(
+    content: str,
+    project: Project,
+    requirements: list[TechRequirement],
+    guidance: dict | None = None,
+    chapter_title: str | None = None,
+    other_leaf_titles: list[str] | None = None,
+    *,
+    allowed_standard_sources: str | None = None,
+    content_plan: dict | None = None,
+    facts_text: str | None = None,
+    global_params: dict | None = None,
+    prior_contents: list[str] | None = None,
+) -> list[Finding]:
+    """供 _run_chapter_qa 取全部发现；warn/info 写入 review_errors，不触发重写。"""
+    return run_chapter_checks(
+        _build_chapter_check_context(
+            content,
+            project,
+            requirements,
+            guidance,
+            chapter_title,
+            other_leaf_titles,
+            allowed_standard_sources=allowed_standard_sources,
+            content_plan=content_plan,
+            facts_text=facts_text,
+            global_params=global_params,
+            prior_contents=prior_contents,
+            scope="chapter",
+        )
+    )
 
 
 def _allowed_standard_sources(bundle: dict) -> str:
@@ -191,33 +257,34 @@ def run_segment_qa(
     segment_label: str,
     content_plan: dict | None = None,
 ) -> tuple[list[str], dict]:
-    """分段撰写时的轻量质检：注册表 segment 子集 + 单段软检。"""
+    """分段撰写时的轻量质检：仅 block 触发重写；warn/info 写入 soft.extra_warn_issues。"""
     guidance = bundle.get("guidance") or {}
     other_titles = bundle.get("other_leaf_titles") or []
     global_params = dict(bundle.get("global_params") or {})
     if bundle.get("engineering_domain") and "engineering_domain" not in global_params:
         global_params["engineering_domain"] = bundle.get("engineering_domain")
 
-    hard_errors = findings_to_messages(
-        run_chapter_checks(
-            ChapterCheckContext(
-                content=content,
-                project=project,
-                requirements=bundle.get("requirements") or [],
-                guidance=guidance,
-                chapter_title=chapter.title,
-                other_leaf_titles=other_titles,
-                allowed_standard_sources=_allowed_standard_sources(bundle),
-                content_plan=content_plan if isinstance(content_plan, dict) else None,
-                global_params=global_params,
-                scope="segment",
-            )
+    findings = run_chapter_checks(
+        ChapterCheckContext(
+            content=content,
+            project=project,
+            requirements=bundle.get("requirements") or [],
+            guidance=guidance,
+            chapter_title=chapter.title,
+            other_leaf_titles=other_titles,
+            allowed_standard_sources=_allowed_standard_sources(bundle),
+            content_plan=content_plan if isinstance(content_plan, dict) else None,
+            global_params=global_params,
+            scope="segment",
         )
     )
-    if hard_errors:
-        return hard_errors, {}
+    hard = [f for f in findings if f.severity == "block"]
+    if hard:
+        return findings_to_messages(hard), {}
 
     soft = _run_soft_qa_once(content, bundle, segment_label=segment_label)
+    warn_msgs = findings_to_messages([f for f in findings if f.severity != "block"])
+    soft.setdefault("extra_warn_issues", []).extend(warn_msgs)
     return [], soft
 
 
@@ -238,17 +305,25 @@ def _apply_qa_result_to_chapter(
 
     soft = soft or {}
     soft_issues = _soft_issue_list(soft)
+    extra_warn = [m for m in (soft.get("extra_warn_issues") or []) if m]
     if soft.get("skipped"):
         chapter.review_status = "yellow"
         chapter.review_errors = dump_review_errors(
-            [f"软质检未执行：{soft.get('skip_reason', '未知原因')}"]
+            [f"软质检未执行：{soft.get('skip_reason', '未知原因')}"] + extra_warn
         )
         if refresh_summary:
             chapter.last_summary = generate_summary(content)
         return
     if not soft.get("passed", True) and soft_issues:
         chapter.review_status = "yellow"
-        chapter.review_errors = dump_review_errors(soft_issues)
+        chapter.review_errors = dump_review_errors(soft_issues + extra_warn)
+        return
+    if extra_warn:
+        # warn/info 级规则发现：标黄提示，不触发重写
+        chapter.review_status = "yellow"
+        chapter.review_errors = dump_review_errors(extra_warn)
+        if refresh_summary:
+            chapter.last_summary = generate_summary(content)
         return
 
     chapter.review_status = "green"
@@ -264,10 +339,11 @@ def _run_chapter_qa(
     bundle: dict,
     *,
     content_plan: dict | None = None,
+    qa_context: dict | None = None,
 ) -> tuple[list[str], dict]:
     guidance = bundle["guidance"]
     other_titles = bundle.get("other_leaf_titles") or []
-    hard_errors = run_hard_qa(
+    findings = run_hard_qa_all_findings(
         content,
         project,
         bundle["requirements"],
@@ -280,9 +356,21 @@ def _run_chapter_qa(
         global_params=bundle.get("global_params"),
         prior_contents=bundle.get("prior_contents"),
     )
-    if hard_errors:
-        return hard_errors, {}
+    hard = [f for f in findings if f.severity == "block"]
+    if hard:
+        if qa_context is not None:
+            qa_context["fix_anchors"] = [
+                (f.evidence or "").strip()
+                for f in hard
+                if (f.evidence or "").strip()
+            ]
+        return findings_to_messages(hard), {}
+    if qa_context is not None:
+        # 软质检失败无结构化锚点
+        qa_context["fix_anchors"] = []
     soft = run_soft_qa(content, bundle)
+    # warn/info 并入 review_errors（yellow），不消耗重试预算
+    warn_msgs = findings_to_messages([f for f in findings if f.severity != "block"])
+    soft.setdefault("extra_warn_issues", []).extend(warn_msgs)
     return [], soft
-
 

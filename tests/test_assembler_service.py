@@ -195,6 +195,7 @@ def test_assemble_document_appends_single_gantt_at_end():
             generated_content=gantt, review_status="green", sort_order=2,
         ),
     ]
+    master = [{"工序": "基础施工", "开始第几天": 1, "持续天数": 30}]
 
     with __import__("tempfile").TemporaryDirectory() as tmp:
         import services.assembler_service as asm
@@ -202,7 +203,10 @@ def test_assemble_document_appends_single_gantt_at_end():
         old_out = asm.OUTPUT_DIR
         asm.OUTPUT_DIR = tmp
         try:
-            with patch("services.assembler_service.append_toc_and_body_sections"):
+            with patch("services.assembler_service.append_toc_and_body_sections"), patch(
+                "services.assembler_service._generate_master_gantt",
+                return_value=master,
+            ):
                 path = assemble_document(project, chapters)
             doc = Document(str(path))
         finally:
@@ -215,7 +219,8 @@ def test_assemble_document_appends_single_gantt_at_end():
     assert captions == ["图1 施工进度横道图"]
 
 
-def test_insert_chart_gantt_now_inserts_picture_not_table():
+def test_insert_chart_gantt_is_skipped_in_chapter():
+    """章节内 GANTT_DATA 防呆：直接调用 _insert_chart 也不再渲染。"""
     from chart.chart_service import CHART_PATTERN
 
     doc = Document()
@@ -223,9 +228,8 @@ def test_insert_chart_gantt_now_inserts_picture_not_table():
     match = next(CHART_PATTERN.finditer(content))
     _insert_chart(doc, match, temp_files=[], duration=30, counters={})
     assert len(doc.tables) == 0
-    assert len(doc.inline_shapes) == 1
-    captions = [p.text for p in doc.paragraphs if p.text.startswith("图")]
-    assert captions == ["图1 施工进度横道图"]
+    assert len(doc.inline_shapes) == 0
+    assert not any(p.text.startswith("图") for p in doc.paragraphs)
 
 
 def test_insert_chart_smart_data_skips_empty_array():

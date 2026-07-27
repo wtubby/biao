@@ -112,7 +112,7 @@ def test_chapter_prompt_preview_includes_content_plan_in_writer():
             "key_points": ["里程碑节点", "关键路径"],
             "technical_methods": ["三级网络计划"],
             "data_to_include": ["总工期180天"],
-            "charts_needed": [{"type": "GANTT_DATA", "purpose": "总体进度"}],
+            "charts_needed": [{"type": "FLOW_DATA", "purpose": "关键路径"}],
             "word_count_target": 1200,
             "avoid": ["主变吊装工艺"],
         }
