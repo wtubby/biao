@@ -26,9 +26,17 @@ def test_cosine_scores_and_blob_roundtrip():
         assert vecs.shape == (2, 512)
 
         blob = embedding_service.to_blob(vecs[0])
+        # 新格式：4 字节维度头 + float32 数据
+        assert len(blob) == 4 + 512 * 4
         restored = embedding_service.from_blob(blob)
         assert restored.shape == (512,)
         np.testing.assert_allclose(restored, vecs[0], rtol=1e-6)
+
+        # 旧格式（无头部）仍可按字节长度推断维度
+        legacy = vecs[0].astype(np.float32).tobytes()
+        legacy_restored = embedding_service.from_blob(legacy)
+        assert legacy_restored.shape == (512,)
+        np.testing.assert_allclose(legacy_restored, vecs[0], rtol=1e-6)
 
         query = embedding_service.embed_query("接地电阻")
         assert query is not None

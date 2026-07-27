@@ -207,6 +207,11 @@ def _sync_chunks_to_db(folder: str | None, db: Session) -> list[KnowledgeChunk]:
             if ENABLE_CHUNK_CONTEXT_PREFIX and row.context_prefix != prefix:
                 row.context_prefix = prefix
                 changed = True
+            # 同正文多源文件：追加路径，避免只保留首次入库来源
+            src = raw.get("source") or ""
+            known = [s for s in (row.source_file or "").split("；") if s]
+            if src and src not in known:
+                row.source_file = "；".join(known + [src]) if known else src
             if row.embedding is None or row.embedding_model != cfg.EMBEDDING_MODEL_PATH or changed:
                 to_embed.append(row)
             continue
@@ -268,7 +273,13 @@ def _semantic_rank_indices(
             continue
         try:
             indexed.append((i, embedding_service.from_blob(blob)))
-        except (ValueError, TypeError):
+        except ValueError:
+            logger.warning(
+                "embedding blob 维度不匹配，index=%s，可能是模型已切换但历史数据未重新计算",
+                i,
+            )
+            continue
+        except TypeError:
             continue
     if not indexed:
         return []
@@ -323,13 +334,13 @@ def has_knowledge_sources(
     project_id: str | None = None,
     db=None,
 ) -> bool:
-    """判断知识库文件夹是否存在可检索内容（项目条目或静态文本分片）。"""
+    """判断知识库文件夹是否存在可检索内容（全局条目或静态文本分片）。"""
     if not folder:
         return False
-    if project_id and db:
+    if db is not None:
         from services.knowledge_item_service import get_folder_item_count
 
-        if get_folder_item_count(folder, project_id, db) > 0:
+        if get_folder_item_count(folder, db) > 0:
             return True
     return bool(_load_chunks(folder))
 
@@ -383,24 +394,23 @@ def retrieve_detailed(
         logger.info("检索跳过：未绑定知识库文件夹 query=%s", query_preview)
         return RetrievalResult([], empty_reason="no_folder", knowledge_available=False)
 
-    if project_id and db:
+    if db is not None:
         from services.knowledge_item_service import get_folder_item_count, search_knowledge_items
 
-        item_count = get_folder_item_count(folder, project_id, db)
+        item_count = get_folder_item_count(folder, db)
         if item_count > 0:
             chunks = search_knowledge_items(
-                query, folder, project_id, db, top_k, use_vector=use_vector,
+                query, folder, db, top_k, use_vector=use_vector,
             )
             if chunks:
                 return RetrievalResult(chunks, knowledge_available=True)
             logger.info(
-                "检索未命中（项目知识条目存在但未匹配） folder=%s query=%s",
+                "检索未命中（知识条目存在但未匹配） folder=%s query=%s",
                 folder,
                 query_preview,
             )
             return RetrievalResult([], empty_reason="no_match", knowledge_available=True)
 
-    if db is not None:
         chunk_rows = _sync_chunks_to_db(folder, db)
         if not chunk_rows:
             logger.info("检索为空（知识库无可用内容） folder=%s query=%s", folder, query_preview)

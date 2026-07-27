@@ -341,7 +341,12 @@ def check_chapter_length_balance(
     return issues
 
 
-def _render_markdown_report(sections: dict[str, Any], passed: bool) -> str:
+def _render_markdown_report(
+    sections: dict[str, Any],
+    passed: bool,
+    *,
+    category_summary: dict[str, Any] | None = None,
+) -> str:
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     lines = [
         "# 合规终审报告",
@@ -350,6 +355,18 @@ def _render_markdown_report(sections: dict[str, Any], passed: bool) -> str:
         f"- 总体结论：**{'通过' if passed else '未通过'}**",
         "",
     ]
+    if category_summary:
+        lines.append("## 检查分类汇总")
+        lines.append("")
+        by_cat = category_summary.get("by_category") or {}
+        if not by_cat:
+            lines.append("（无问题）")
+        else:
+            for cat, payload in by_cat.items():
+                label = payload.get("label") or cat
+                count = payload.get("count", 0)
+                lines.append(f"- **{label}**：{count} 项")
+        lines.append("")
     for title, payload in sections.items():
         lines.append(f"## {title}")
         lines.append("")
@@ -358,9 +375,17 @@ def _render_markdown_report(sections: dict[str, Any], passed: bool) -> str:
                 lines.append("（无问题）")
             for item in payload:
                 if isinstance(item, dict):
-                    level = item.get("level", item.get("status", ""))
+                    level = item.get("level", item.get("status", item.get("severity", "")))
                     msg = item.get("message") or item.get("title") or str(item)
-                    prefix = {"fail": "✗", "warn": "⚠", "pass": "✓", "missing": "✗", "partial": "△"}.get(level, "·")
+                    prefix = {
+                        "fail": "✗",
+                        "block": "✗",
+                        "warn": "⚠",
+                        "pass": "✓",
+                        "info": "·",
+                        "missing": "✗",
+                        "partial": "△",
+                    }.get(level, "·")
                     lines.append(f"- {prefix} {msg}")
                 else:
                     lines.append(f"- {item}")
@@ -389,6 +414,37 @@ def run_compliance(
         docx_text = _chapters_combined_text(chapters)
         format_info = {}
 
+    from services.check_catalog import category_label
+    from services.check_registry import ProjectCheckContext, run_project_checks, summarize_findings
+    from services.tender_detail_service import filter_qualification_items, get_tender_detail
+
+    detail = get_tender_detail(project)
+    qualification_items = filter_qualification_items(
+        detail.get("qualification_items") or [],
+        "废标项",
+    )
+    # 若无显式「废标项」tab 数据，回退全部资格/符合性条目供对照
+    if not qualification_items:
+        qualification_items = detail.get("qualification_items") or []
+
+    findings = run_project_checks(
+        ProjectCheckContext(
+            project=project,
+            chapters=chapters,
+            requirements=requirements,
+            docx_text=docx_text,
+            meta=meta,
+            docx_path=docx_path,
+            format_info=format_info,
+            qualification_items=qualification_items,
+        )
+    )
+    summary = summarize_findings(findings)
+    fail_count = summary["block_count"]
+    # info 不计入 warning；与历史 warn 语义对齐
+    warn_count = summary["warn_count"]
+
+    # 保留原 sections 结构供前端/测试兼容；按分类重组 + 保留明细
     cross = check_cross_consistency(project, docx_text, meta)
     coverage = check_scoring_coverage(docx_text, requirements)
     substantial = check_substantial_response(docx_text, requirements)
@@ -397,23 +453,7 @@ def run_compliance(
     mandatory = check_mandatory_elements_doc(docx_text, requirements)
     length_balance = check_chapter_length_balance(chapters)
     font_issues = check_font_safety(docx_path) if docx_path and docx_path.exists() else []
-
-    fail_count = 0
-    warn_count = 0
-    for item in cross:
-        if item.get("level") == "fail":
-            fail_count += 1
-        elif item.get("level") == "warn":
-            warn_count += 1
-    # 评分项完全未响应 = 硬性风险（与模板残留同级 fail）；部分覆盖仍为 warn
-    fail_count += sum(1 for c in coverage if c["status"] == "missing")
-    warn_count += sum(1 for c in coverage if c["status"] == "partial")
-    warn_count += sum(1 for s in substantial if not s["responded"])
-    warn_count += len(title_kw)
-    warn_count += len(mandatory)
-    warn_count += len(length_balance)
-    fail_count += len(residues)
-    warn_count += len(font_issues)
+    disqual_findings = [f for f in findings if f.category == "disqualification_risk"]
 
     sections = {
         "一、跨章节一致性": cross,
@@ -437,19 +477,46 @@ def run_compliance(
             f"⚠ {i['message']}" for i in length_balance
         ] or ["（无）"],
         "八、字体规范": font_issues or ["（无）"],
-        "九、格式摘要": [
+        "九、废标条款对照": [
+            {
+                "level": f.severity if f.severity != "block" else "fail",
+                "message": f.message,
+            }
+            for f in disqual_findings
+        ] or ["（无废标条款或无需对照）"],
+        "十、格式摘要": [
             f"非空段落 {format_info.get('non_empty_paragraphs', '—')}，标题 {format_info.get('heading_count', '—')}",
         ],
     }
 
+    # 分类视图（按 catalog 标签）
+    category_sections: dict[str, list[dict[str, Any]]] = {}
+    for f in findings:
+        label = category_label(f.category)
+        category_sections.setdefault(label, []).append(
+            {
+                "level": f.severity,
+                "message": f.message,
+                "check_id": f.check_id,
+                "evidence": f.evidence,
+            }
+        )
+
     passed = fail_count == 0
-    markdown = _render_markdown_report(sections, passed)
+    markdown = _render_markdown_report(
+        sections,
+        passed,
+        category_summary=summary,
+    )
     report = {
         "passed": passed,
         "failure_count": fail_count,
         "warning_count": warn_count,
         "sections": sections,
         "coverage": coverage,
+        "findings": [f.to_dict() for f in findings],
+        "category_summary": summary,
+        "category_sections": category_sections,
         "markdown": markdown,
         "checked_at": datetime.now(timezone.utc).isoformat(),
     }

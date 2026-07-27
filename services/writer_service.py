@@ -23,7 +23,6 @@ from services.chapter_generation_service import (
     resolve_content_plan,
 )
 from services.chapter_qa_orchestrator import (
-    _apply_matrix_issues_to_chapter,
     _apply_qa_result_to_chapter,
     _mark_chapter_failed,
     _run_chapter_qa,
@@ -157,9 +156,6 @@ def write_and_qa_chapter(
             if chapter.review_status == "green":
                 chapter.review_status = "yellow"
 
-        if chapter.review_status in ("green", "yellow") and (chapter.generated_content or "").strip():
-            _apply_matrix_issues_to_chapter(db, project, chapter)
-
         db.commit()
         db.refresh(chapter)
         return chapter, messages if is_key else chat_messages, retrieval_warning
@@ -213,9 +209,6 @@ def review_chapter_content(
         soft=soft,
         refresh_summary=refresh_summary,
     )
-
-    if chapter.review_status in ("green", "yellow") and content:
-        _apply_matrix_issues_to_chapter(db, project, chapter)
 
     db.commit()
     db.refresh(chapter)

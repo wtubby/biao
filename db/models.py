@@ -87,11 +87,12 @@ class GlobalFact(Base):
 
 
 class KnowledgeItem(Base):
+    """全局共享的知识条目（按 folder_path 归属，与项目解耦）。"""
+
     __tablename__ = "knowledge_items"
 
     id: Mapped[str] = mapped_column(Text, primary_key=True, default=_uuid)
-    project_id: Mapped[str] = mapped_column(Text, index=True)
-    folder_path: Mapped[str] = mapped_column(Text)
+    folder_path: Mapped[str] = mapped_column(Text, index=True)
     source_file: Mapped[str | None] = mapped_column(Text, nullable=True)
     title: Mapped[str] = mapped_column(Text)
     resume: Mapped[str] = mapped_column(Text, default="")
@@ -123,15 +124,25 @@ class KnowledgeChunk(Base):
 
 
 class KnowledgeFolderStatus(Base):
+    """某个知识文件夹的全局抽取状态（不再按项目区分）。"""
+
     __tablename__ = "knowledge_folder_status"
 
-    id: Mapped[str] = mapped_column(Text, primary_key=True, default=_uuid)
-    project_id: Mapped[str] = mapped_column(Text, index=True)
-    folder_path: Mapped[str] = mapped_column(Text, index=True)
+    folder_path: Mapped[str] = mapped_column(Text, primary_key=True)
     status: Mapped[str] = mapped_column(Text, default="pending")
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     item_count: Mapped[int] = mapped_column(Integer, default=0)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+
+
+class ProjectKnowledgeFolder(Base):
+    """项目对知识文件夹的勾选/启用关系，与抽取结果完全解耦。"""
+
+    __tablename__ = "project_knowledge_folders"
+
+    project_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    folder_path: Mapped[str] = mapped_column(Text, primary_key=True)
+    enabled_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
 class ChapterVersion(Base):

@@ -1,52 +1,21 @@
 """章节硬/软质检编排。"""
 
 import logging
-import re
 
-from config import (
-    MIN_DIGIT_RATIO,
-    WORD_COUNT_MAX_RATIO,
-    WORD_COUNT_MIN_RATIO,
-)
 from db.models import Project, TechOutline, TechRequirement
 from llm.llm_client import call_llm_json
 from llm.schemas import QAMultiWindowResult, QAResult
-from sqlalchemy.orm import Session
 from prompts.qa_prompt import (
     build_qa_chat_messages,
-    build_qa_user_prompt,
     sample_content_windows_for_qa,
 )
-from services.blind_bid_service import is_blind_bid
-from services.chapter_generation_service import _count_chinese_chars, generate_summary
-from services.chapter_review_errors import dump_review_errors, merge_review_errors
-from services.project_meta import get_meta
-from services.qa_rules import (
-    check_ai_cliche_residues,
-    check_ai_spacing,
-    check_atomic_markdown_closure,
-    check_blind_bid_residues,
-    check_chart_renderability,
-    check_chapter_scope,
-    check_cross_chapter_overlap,
-    check_descriptive_chapter_measures,
-    check_fabricated_standards,
-    check_first_paragraph_repeats_title,
-    check_global_fact_consistency,
-    check_heading_keyword_coverage,
-    check_markdown_table_integrity,
-    check_paragraph_opening_repetition,
-    check_opening_pattern_overuse,
-    check_plan_key_points_coverage,
-    check_scoring_coverage_in_content,
-    check_stitch_cheat,
-    check_template_residues,
-    check_truncation_risk,
-    split_keywords,
-    trim_out_of_scope_content,
+from services.chapter_generation_service import generate_summary
+from services.chapter_review_errors import dump_review_errors
+from services.check_registry import (
+    ChapterCheckContext,
+    findings_to_messages,
+    run_chapter_checks,
 )
-from services.response_matrix_service import matrix_issues_for_chapter
-from services.writing_guidance import is_descriptive_chapter
 
 logger = logging.getLogger(__name__)
 
@@ -65,92 +34,24 @@ def run_hard_qa(
     global_params: dict | None = None,
     prior_contents: list[str] | None = None,
 ) -> list[str]:
-    errors: list[str] = []
-
-    if other_leaf_titles:
-        errors.extend(check_chapter_scope(content, chapter_title or "", other_leaf_titles))
-
-    if project.duration_days:
-        duration_mentions = re.findall(r"(\d+)\s*(天|日|日历天)", content)
-        for num, _ in duration_mentions:
-            if int(num) > project.duration_days * 2:
-                errors.append(f"工期数字 {num} 与全局参数 {project.duration_days} 天偏差过大")
-
-    digits = len(re.findall(r"\d", content))
-    if (
-        not is_descriptive_chapter(chapter_title)
-        and len(content) > 500
-        and digits / max(len(content) / 100, 1) < MIN_DIGIT_RATIO
-    ):
-        errors.append("内容密度不足：技术参数与数字偏少")
-
-    errors.extend(check_template_residues(content))
-    errors.extend(check_blind_bid_residues(content, enabled=is_blind_bid(project)))
-    errors.extend(check_chart_renderability(content))
-    errors.extend(check_ai_spacing(content))
-    errors.extend(check_truncation_risk(content))
-    errors.extend(check_descriptive_chapter_measures(content, chapter_title or ""))
-    errors.extend(check_first_paragraph_repeats_title(content, chapter_title or ""))
-    errors.extend(check_paragraph_opening_repetition(content))
-    errors.extend(check_opening_pattern_overuse(content))
-    errors.extend(check_markdown_table_integrity(content))
-    errors.extend(check_atomic_markdown_closure(content))
-    errors.extend(check_ai_cliche_residues(content))
-    domain = None
-    if global_params and isinstance(global_params, dict):
-        domain = global_params.get("engineering_domain")
-    if not domain:
-        from services.project_meta import get_meta
-        domain = get_meta(project).get("engineering_domain")
-    errors.extend(check_fabricated_standards(content, allowed_standard_sources, domain=domain))
-    errors.extend(
-        check_global_fact_consistency(
-            content,
+    """章级硬质检：经 CheckSkill 注册表执行，返回兼容的字符串错误列表。"""
+    findings = run_chapter_checks(
+        ChapterCheckContext(
+            content=content,
+            project=project,
+            requirements=requirements or [],
+            guidance=guidance,
+            chapter_title=chapter_title,
+            other_leaf_titles=other_leaf_titles,
+            allowed_standard_sources=allowed_standard_sources,
+            content_plan=content_plan,
             facts_text=facts_text,
             global_params=global_params,
+            prior_contents=prior_contents,
+            scope="chapter",
         )
     )
-    errors.extend(check_cross_chapter_overlap(content, prior_contents))
-    if content_plan and not is_descriptive_chapter(chapter_title):
-        errors.extend(check_plan_key_points_coverage(content, content_plan.get("key_points")))
-
-    # 评分覆盖进重试环（含刚性项实质性响应）
-    if requirements and not is_descriptive_chapter(chapter_title):
-        errors.extend(check_scoring_coverage_in_content(content, requirements))
-
-    all_keywords: list[str] = []
-    for req in requirements:
-        all_keywords.extend(split_keywords(req.keyword))
-        # mandatory / 刚性关键词已由 check_scoring_coverage_in_content 覆盖，避免重复报错
-
-    unique_kw = list(dict.fromkeys(all_keywords))
-    if unique_kw:
-        errors.extend(check_heading_keyword_coverage(content, chapter_title or "", unique_kw))
-        errors.extend(check_stitch_cheat(content, unique_kw))
-
-    opens = len(re.findall(r"\[(GANTT|TIMELINE|FLOW|ORG|SMART)_DATA:", content, re.I))
-    closes = content.count("]]") + content.count("}]")
-    if opens > closes:
-        errors.append("图表占位符未正确闭合")
-
-    target_words = (guidance or {}).get("target_words")
-    if target_words:
-        actual = _count_chinese_chars(content)
-        min_words = int(target_words * WORD_COUNT_MIN_RATIO)
-        max_words = int(target_words * WORD_COUNT_MAX_RATIO)
-        if actual < min_words:
-            errors.append(f"篇幅不足：当前约 {actual} 字，目标 {target_words} 字（下限 {min_words}）")
-        elif actual > max_words:
-            errors.append(f"篇幅过长：当前约 {actual} 字，目标 {target_words} 字（上限 {max_words}）")
-
-    # 去重保序
-    seen: set[str] = set()
-    unique_errors: list[str] = []
-    for err in errors:
-        if err not in seen:
-            seen.add(err)
-            unique_errors.append(err)
-    return unique_errors
+    return findings_to_messages(findings)
 
 
 def _allowed_standard_sources(bundle: dict) -> str:
@@ -272,31 +173,6 @@ def _mark_chapter_failed(chapter: TechOutline, message: str) -> None:
     chapter.review_errors = dump_review_errors([message])
 
 
-def _apply_matrix_issues_to_chapter(
-    db: Session,
-    project: Project,
-    chapter: TechOutline,
-) -> None:
-    """定稿前合并评分覆盖缺口。
-
-    普通评分项缺口：green → yellow；
-    刚性风险项缺口：直接打 red，导出拦截自动生效。
-    """
-    try:
-        issues = matrix_issues_for_chapter(db, project, chapter)
-    except Exception as exc:
-        logger.warning("评分覆盖检查失败 chapter=%s: %s", chapter.id, exc)
-        return
-    if not issues:
-        return
-    chapter.review_errors = merge_review_errors(chapter.review_errors, issues)
-    risk_issues = [i for i in issues if i.startswith("刚性风险项")]
-    if risk_issues:
-        chapter.review_status = "red"
-    elif chapter.review_status == "green":
-        chapter.review_status = "yellow"
-
-
 def _soft_issue_list(soft: dict) -> list[str]:
     return (
         (soft.get("coverage_issues") or [])
@@ -315,44 +191,31 @@ def run_segment_qa(
     segment_label: str,
     content_plan: dict | None = None,
 ) -> tuple[list[str], dict]:
-    """分段撰写时的轻量质检：硬规则子集 + 单段软检。"""
+    """分段撰写时的轻量质检：注册表 segment 子集 + 单段软检。"""
     guidance = bundle.get("guidance") or {}
     other_titles = bundle.get("other_leaf_titles") or []
-    hard_errors: list[str] = []
+    global_params = dict(bundle.get("global_params") or {})
+    if bundle.get("engineering_domain") and "engineering_domain" not in global_params:
+        global_params["engineering_domain"] = bundle.get("engineering_domain")
 
-    if other_titles:
-        hard_errors.extend(check_chapter_scope(content, chapter.title or "", other_titles))
-    hard_errors.extend(check_template_residues(content))
-    hard_errors.extend(check_chart_renderability(content))
-    hard_errors.extend(check_ai_spacing(content))
-    hard_errors.extend(check_markdown_table_integrity(content))
-    hard_errors.extend(check_atomic_markdown_closure(content))
-    hard_errors.extend(
-        check_fabricated_standards(
-            content,
-            _allowed_standard_sources(bundle),
-            domain=bundle.get("engineering_domain"),
+    hard_errors = findings_to_messages(
+        run_chapter_checks(
+            ChapterCheckContext(
+                content=content,
+                project=project,
+                requirements=bundle.get("requirements") or [],
+                guidance=guidance,
+                chapter_title=chapter.title,
+                other_leaf_titles=other_titles,
+                allowed_standard_sources=_allowed_standard_sources(bundle),
+                content_plan=content_plan if isinstance(content_plan, dict) else None,
+                global_params=global_params,
+                scope="segment",
+            )
         )
     )
-    if content.strip().lstrip().startswith("#"):
-        hard_errors.append("分段正文严禁输出 # 标题行")
-
-    seen: set[str] = set()
-    unique_hard: list[str] = []
-    for err in hard_errors:
-        if err not in seen:
-            seen.add(err)
-            unique_hard.append(err)
-    if unique_hard:
-        return unique_hard, {}
-
-    seg_plan = content_plan if isinstance(content_plan, dict) else None
-    if seg_plan and not is_descriptive_chapter(chapter.title):
-        plan_errors = check_plan_key_points_coverage(
-            content, seg_plan.get("key_points"),
-        )
-        if plan_errors:
-            return plan_errors, {}
+    if hard_errors:
+        return hard_errors, {}
 
     soft = _run_soft_qa_once(content, bundle, segment_label=segment_label)
     return [], soft

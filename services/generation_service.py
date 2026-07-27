@@ -100,13 +100,17 @@ def recover_orphaned_generations(db=None) -> int:
             db.close()
 
 
-def _mark_leaves_red(db, leaf_ids: list[str], message: str) -> list[str]:
+def _mark_leaves_red(db, project_id: str, leaf_ids: list[str], message: str) -> list[str]:
     """将仍卡在 generating 的叶子标为 red，返回实际变更的 chapter_id 列表。"""
     if not leaf_ids:
         return []
     rows = (
         db.query(TechOutline)
-        .filter(TechOutline.id.in_(leaf_ids), TechOutline.review_status == "generating")
+        .filter(
+            TechOutline.project_id == project_id,
+            TechOutline.id.in_(leaf_ids),
+            TechOutline.review_status == "generating",
+        )
         .all()
     )
     changed: list[str] = []
@@ -125,6 +129,7 @@ async def _emit_group_failure(project_id: str, group: list[TechOutline], message
     try:
         changed_ids = _mark_leaves_red(
             db,
+            project_id,
             [leaf.id for leaf in group],
             message,
         )
@@ -231,7 +236,7 @@ async def _process_section_group(
                 logger.exception("单章生成失败 chapter=%s: %s", leaf.id, exc)
                 db = SessionLocal()
                 try:
-                    _mark_leaves_red(db, [leaf.id], f"生成失败：{exc}")
+                    _mark_leaves_red(db, project_id, [leaf.id], f"生成失败：{exc}")
                 finally:
                     db.close()
                 # 记入 results，由 _emit 推送 done(red)，避免与 error 事件重复计数

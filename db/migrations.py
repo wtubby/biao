@@ -79,3 +79,21 @@ def ensure_schema() -> None:
                     )
                 )
                 logger.info("已为 knowledge_chunks 添加 (folder_path, chunk_hash) 唯一索引")
+
+        # 知识条目/文件夹状态从「按项目」改为「全局」：旧表结构直接丢弃重建（不做数据迁移）
+        rebuild_knowledge = False
+        if "knowledge_items" in tables:
+            if "project_id" in _table_columns(conn, "knowledge_items"):
+                rebuild_knowledge = True
+        if "knowledge_folder_status" in tables:
+            kfs_cols = _table_columns(conn, "knowledge_folder_status")
+            if "project_id" in kfs_cols or "id" in kfs_cols:
+                rebuild_knowledge = True
+        if rebuild_knowledge:
+            conn.execute(text("DROP TABLE IF EXISTS knowledge_items"))
+            conn.execute(text("DROP TABLE IF EXISTS knowledge_folder_status"))
+            logger.info("已删除旧版按项目隔离的知识条目/状态表，将重建为全局表")
+
+    from db.database import Base
+
+    Base.metadata.create_all(bind=engine)

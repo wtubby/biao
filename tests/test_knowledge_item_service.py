@@ -1,16 +1,13 @@
 """知识库条目化：LLM 预处理 + 标题/摘要/正文综合检索。"""
 
 from datetime import datetime, timedelta, timezone
-from types import SimpleNamespace
 import re
-import sys
-import uuid
-from unittest.mock import MagicMock
+from types import SimpleNamespace
 
 import numpy as np
 
 from db.database import SessionLocal, init_db
-from db.models import KnowledgeFolderStatus, Project
+from db.models import KnowledgeFolderStatus
 from services import embedding_service
 from services.knowledge_item_service import (
     extract_knowledge_items,
@@ -59,10 +56,10 @@ def test_search_knowledge_items_uses_content_matches(monkeypatch):
 
     monkeypatch.setattr(
         "services.knowledge_item_service.list_items",
-        lambda folder_path, project_id, db: items,
+        lambda folder_path, db: items,
     )
 
-    results = search_knowledge_items("GIS 气室 交接试验", "GIS安装", "project-1", object(), top_k=1)
+    results = search_knowledge_items("GIS 气室 交接试验", "GIS安装", object(), top_k=1)
 
     assert len(results) == 1
     assert "通用施工方案" in results[0]
@@ -102,13 +99,13 @@ def test_search_knowledge_items_semantic_hit_without_lexical_overlap(monkeypatch
     ]
     monkeypatch.setattr(
         "services.knowledge_item_service.list_items",
-        lambda folder_path, project_id, db: items,
+        lambda folder_path, db: items,
     )
 
     embedding_service.set_test_embedder(_topic_embedder)
     try:
         # 查询词与条目标题/正文几乎无字面重叠，但语义同属接地电阻主题
-        results = search_knowledge_items("接地电阻测试", "接地网", "project-1", object(), top_k=1)
+        results = search_knowledge_items("接地电阻测试", "接地网", object(), top_k=1)
     finally:
         embedding_service.set_test_embedder(None)
 
@@ -149,7 +146,7 @@ def test_search_knowledge_items_skips_semantic_when_use_vector_false(monkeypatch
     ]
     monkeypatch.setattr(
         "services.knowledge_item_service.list_items",
-        lambda folder_path, project_id, db: items,
+        lambda folder_path, db: items,
     )
 
     semantic_called = {"count": 0}
@@ -169,10 +166,10 @@ def test_search_knowledge_items_skips_semantic_when_use_vector_false(monkeypatch
     embedding_service.set_test_embedder(_topic_embedder)
     try:
         with_vector = search_knowledge_items(
-            "接地电阻测试", "接地网", "project-1", object(), top_k=1, use_vector=True,
+            "接地电阻测试", "接地网", object(), top_k=1, use_vector=True,
         )
         without_vector = search_knowledge_items(
-            "接地电阻测试", "接地网", "project-1", object(), top_k=1, use_vector=False,
+            "接地电阻测试", "接地网", object(), top_k=1, use_vector=False,
         )
     finally:
         embedding_service.set_test_embedder(None)
@@ -211,28 +208,23 @@ def test_search_knowledge_items_bm25_fallback_when_embedding_disabled(monkeypatc
     ]
     monkeypatch.setattr(
         "services.knowledge_item_service.list_items",
-        lambda folder_path, project_id, db: items,
+        lambda folder_path, db: items,
     )
 
-    hit = search_knowledge_items("GIS 气室 交接试验", "GIS安装", "project-1", object(), top_k=1)
+    hit = search_knowledge_items("GIS 气室 交接试验", "GIS安装", object(), top_k=1)
     assert len(hit) == 1
     assert "通用施工方案" in hit[0]
 
-    miss = search_knowledge_items("完全不相关的查询词xyz", "GIS安装", "project-1", object(), top_k=1)
+    miss = search_knowledge_items("完全不相关的查询词xyz", "GIS安装", object(), top_k=1)
     assert miss == []
 
 
 def test_knowledge_folder_status_persists_processing_and_failure(monkeypatch):
     init_db()
     db = SessionLocal()
-    project_id = f"project-kb-{uuid.uuid4().hex[:8]}"
     try:
-        project = Project(id=project_id, name="知识库测试")
-        db.add(project)
-        db.commit()
-
-        mark_folder_processing(project_id, "GIS安装", db)
-        detail = get_folder_status_detail(project_id, "GIS安装", db)
+        mark_folder_processing("GIS安装", db)
+        detail = get_folder_status_detail("GIS安装", db)
         assert detail["status"] == "processing"
 
         monkeypatch.setattr(
@@ -245,20 +237,17 @@ def test_knowledge_folder_status_persists_processing_and_failure(monkeypatch):
         )
 
         try:
-            extract_knowledge_items("GIS安装", project_id, db)
+            extract_knowledge_items("GIS安装", db)
         except RuntimeError:
             pass
 
-        detail = get_folder_status_detail(project_id, "GIS安装", db)
+        detail = get_folder_status_detail("GIS安装", db)
         assert detail["status"] == "failed"
         assert detail["error"]
 
         row = (
             db.query(KnowledgeFolderStatus)
-            .filter(
-                KnowledgeFolderStatus.project_id == project_id,
-                KnowledgeFolderStatus.folder_path == "GIS安装",
-            )
+            .filter(KnowledgeFolderStatus.folder_path == "GIS安装")
             .first()
         )
         assert row is not None
@@ -271,14 +260,13 @@ def test_knowledge_folder_status_persists_processing_and_failure(monkeypatch):
 def test_knowledge_folder_status_marks_stale_processing_as_failed():
     init_db()
     db = SessionLocal()
-    project_id = f"project-kb-2-{uuid.uuid4().hex[:8]}"
     try:
-        project = Project(id=project_id, name="知识库测试2")
-        db.add(project)
+        db.query(KnowledgeFolderStatus).filter(
+            KnowledgeFolderStatus.folder_path == "主变安装"
+        ).delete()
         db.commit()
 
         row = KnowledgeFolderStatus(
-            project_id=project_id,
             folder_path="主变安装",
             status="processing",
             error_message=None,
@@ -287,7 +275,7 @@ def test_knowledge_folder_status_marks_stale_processing_as_failed():
         db.add(row)
         db.commit()
 
-        detail = get_folder_status_detail(project_id, "主变安装", db)
+        detail = get_folder_status_detail("主变安装", db)
         assert detail["status"] == "failed"
         assert "服务已重启" in detail["error"]
     finally:

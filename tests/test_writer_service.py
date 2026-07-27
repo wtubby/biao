@@ -116,7 +116,7 @@ def test_run_soft_qa_network_failure_skipped(monkeypatch):
 
 
 def test_run_hard_qa_flags_content_too_short(monkeypatch):
-    monkeypatch.setattr("services.chapter_qa_orchestrator.WORD_COUNT_MIN_RATIO", 0.75)
+    monkeypatch.setattr("config.WORD_COUNT_MIN_RATIO", 0.75)
     project = Project(id="p1", name="测试", voltage_level="220kV", duration_days=180)
     content = "施工组织方案概述。" * 10
     errors = run_hard_qa(
@@ -130,8 +130,8 @@ def test_run_hard_qa_flags_content_too_short(monkeypatch):
 
 
 def test_run_hard_qa_flags_fabricated_standards(monkeypatch):
-    monkeypatch.setattr("services.chapter_qa_orchestrator.WORD_COUNT_MIN_RATIO", 0.01)
-    monkeypatch.setattr("services.chapter_qa_orchestrator.WORD_COUNT_MAX_RATIO", 100.0)
+    monkeypatch.setattr("config.WORD_COUNT_MIN_RATIO", 0.01)
+    monkeypatch.setattr("config.WORD_COUNT_MAX_RATIO", 100.0)
     project = Project(id="p1", name="测试", voltage_level="220kV", duration_days=180)
     content = (
         "本工程220kV变电站施工组织设计，总工期180日历天。"
@@ -149,8 +149,8 @@ def test_run_hard_qa_flags_fabricated_standards(monkeypatch):
 
 
 def test_run_hard_qa_flags_plan_coverage(monkeypatch):
-    monkeypatch.setattr("services.chapter_qa_orchestrator.WORD_COUNT_MIN_RATIO", 0.01)
-    monkeypatch.setattr("services.chapter_qa_orchestrator.WORD_COUNT_MAX_RATIO", 100.0)
+    monkeypatch.setattr("config.WORD_COUNT_MIN_RATIO", 0.01)
+    monkeypatch.setattr("config.WORD_COUNT_MAX_RATIO", 100.0)
     project = Project(id="p1", name="测试", voltage_level="220kV", duration_days=180)
     content = (
         "本工程220kV变电站施工组织设计，总工期180日历天。"
@@ -266,8 +266,8 @@ def test_write_and_qa_chapter_soft_qa_failure_sets_yellow(monkeypatch):
         project, chapter, _ = _seed_write_chapter(db, target_words=5000)
         monkeypatch.setattr("services.writer_service.ENABLE_CONTENT_PLAN", False)
         monkeypatch.setattr("services.writer_service.MAX_QA_RETRY", 0)
-        monkeypatch.setattr("services.chapter_qa_orchestrator.WORD_COUNT_MIN_RATIO", 0.01)
-        monkeypatch.setattr("services.chapter_qa_orchestrator.WORD_COUNT_MAX_RATIO", 100.0)
+        monkeypatch.setattr("config.WORD_COUNT_MIN_RATIO", 0.01)
+        monkeypatch.setattr("config.WORD_COUNT_MAX_RATIO", 100.0)
 
         with patch(
             "services.writer_service.generate_chapter_content",
@@ -305,8 +305,8 @@ def test_write_and_qa_chapter_soft_qa_skipped_sets_yellow(monkeypatch):
     try:
         project, chapter, _ = _seed_write_chapter(db, target_words=5000)
         monkeypatch.setattr("services.writer_service.ENABLE_CONTENT_PLAN", False)
-        monkeypatch.setattr("services.chapter_qa_orchestrator.WORD_COUNT_MIN_RATIO", 0.01)
-        monkeypatch.setattr("services.chapter_qa_orchestrator.WORD_COUNT_MAX_RATIO", 100.0)
+        monkeypatch.setattr("config.WORD_COUNT_MIN_RATIO", 0.01)
+        monkeypatch.setattr("config.WORD_COUNT_MAX_RATIO", 100.0)
 
         with patch(
             "services.writer_service.generate_chapter_content",

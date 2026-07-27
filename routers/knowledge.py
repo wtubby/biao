@@ -8,6 +8,7 @@ from db.database import SessionLocal, get_db
 from db.models import Project
 from services import knowledge_item_service as kis
 from services.background_jobs import spawn_sync
+from services.project_meta import get_meta
 
 logger = logging.getLogger(__name__)
 
@@ -18,22 +19,16 @@ class ProcessFolderBody(BaseModel):
     folder_path: str
 
 
-def _run_extract(project_id: str, folder_path: str) -> None:
+def _run_extract(folder_path: str, domain: str | None) -> None:
     db = SessionLocal()
     try:
-        kis.extract_knowledge_items(folder_path, project_id, db)
+        kis.extract_knowledge_items(folder_path, db, domain=domain)
     except Exception as exc:
-        logger.exception(
-            "知识库后台提取失败 project=%s folder=%s", project_id, folder_path
-        )
+        logger.exception("知识库后台提取失败 folder=%s", folder_path)
         try:
-            kis.mark_folder_failed(project_id, folder_path, db, str(exc))
+            kis.mark_folder_failed(folder_path, db, str(exc))
         except Exception:
-            logger.exception(
-                "写入知识库失败状态也失败 project=%s folder=%s",
-                project_id,
-                folder_path,
-            )
+            logger.exception("写入知识库失败状态也失败 folder=%s", folder_path)
     finally:
         db.close()
 
@@ -50,8 +45,23 @@ def process_folder(
     folder_path = body.folder_path.strip()
     if not folder_path:
         raise HTTPException(400, "folder_path 不能为空")
-    kis.mark_folder_processing(project_id, folder_path, db)
-    spawn_sync(_run_extract, project_id, folder_path)
+
+    kis.enable_folder_for_project(project_id, folder_path, db)
+
+    detail = kis.get_folder_status_detail(folder_path, db)
+    if detail["status"] == "ready" and detail["count"] > 0:
+        return {
+            "status": "ready",
+            "folder_path": folder_path,
+            "count": detail["count"],
+            "reused": True,
+        }
+    if detail["status"] == "processing":
+        return {"status": "processing", "folder_path": folder_path}
+
+    domain = get_meta(project).get("engineering_domain")
+    kis.mark_folder_processing(folder_path, db)
+    spawn_sync(_run_extract, folder_path, domain)
     return {"status": "processing", "folder_path": folder_path}
 
 
@@ -64,8 +74,8 @@ def list_knowledge_items(
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
         raise HTTPException(404, "项目不存在")
-    items = kis.list_items(folder_path, project_id, db)
-    detail = kis.get_folder_status_detail(project_id, folder_path, db)
+    items = kis.list_items(folder_path, db)
+    detail = kis.get_folder_status_detail(folder_path, db)
     return {
         "status": detail["status"],
         "count": len(items),

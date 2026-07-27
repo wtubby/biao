@@ -61,6 +61,10 @@ function ComplianceReportDrawer({ open, onClose, projectId }) {
             </Tag>
             <Tag color="error">失败项 {report.failure_count}</Tag>
             <Tag color="warning">警告项 {report.warning_count}</Tag>
+            {report.category_summary?.by_category &&
+              Object.entries(report.category_summary.by_category).slice(0, 6).map(([cat, payload]) => (
+                <Tag key={cat}>{payload.label || cat} {payload.count}</Tag>
+              ))}
           </Space>
         )}
         {report?.stale && (

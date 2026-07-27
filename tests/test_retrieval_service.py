@@ -174,7 +174,7 @@ def test_retrieve_falls_back_to_bm25_when_embedding_disabled(tmp_path, monkeypat
 
 
 def test_sync_chunks_dedupes_identical_text_across_files(tmp_path, monkeypatch):
-    """同一文件夹下多文件相同正文只建一条 KnowledgeChunk；再次同步仍保持一条。"""
+    """同一文件夹下多文件相同正文只建一条 KnowledgeChunk；source_file 追加多源路径。"""
     from db.models import KnowledgeChunk
     from services.retrieval_service import _load_chunks, _sync_chunks_to_db
 
@@ -204,6 +204,15 @@ def test_sync_chunks_dedupes_identical_text_across_files(tmp_path, monkeypatch):
             == 1
         )
         assert {r.chunk_hash for r in rows} == {h}
+        stored = (
+            db.query(KnowledgeChunk)
+            .filter(KnowledgeChunk.folder_path == "规范条文", KnowledgeChunk.chunk_hash == h)
+            .one()
+        )
+        sources = set((stored.source_file or "").split("；"))
+        assert any(s.endswith("a.txt") for s in sources)
+        assert any(s.endswith("b.txt") for s in sources)
+        assert len(sources) == 2
 
         _sync_chunks_to_db("规范条文", db)
         assert (
@@ -212,6 +221,15 @@ def test_sync_chunks_dedupes_identical_text_across_files(tmp_path, monkeypatch):
             .count()
             == 1
         )
+        stored2 = (
+            db.query(KnowledgeChunk)
+            .filter(KnowledgeChunk.folder_path == "规范条文", KnowledgeChunk.chunk_hash == h)
+            .one()
+        )
+        # 再次同步不应重复追加
+        parts = [s for s in (stored2.source_file or "").split("；") if s]
+        assert len(parts) == 2
+        assert len(set(parts)) == 2
     finally:
         db.close()
 

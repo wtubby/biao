@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from db.models import Project, TechOutline, TechRequirement
 from services.outline_order import sort_outline_tree_dfs
-from services.chapter_review_errors import merge_review_errors
+from services.chapter_review_errors import dump_review_errors, parse_review_errors
 from services.project_meta import get_meta
 from services.qa_rules import (
     extract_coverage_candidates,
@@ -189,15 +189,30 @@ def matrix_issues_for_chapter(
     return issues
 
 
+def _is_matrix_coverage_issue(msg: str) -> bool:
+    """识别 matrix_issues_for_chapter 写出的条目（与硬质检措辞刻意区分）。"""
+    if not msg:
+        return False
+    if msg.startswith("评分覆盖："):
+        return True
+    if msg.startswith(("评分项", "刚性风险项")) and (
+        "评分覆盖不足：缺少必备要素" in msg
+        or "关键词未在正文中体现（期望：" in msg
+    ):
+        return True
+    return False
+
+
 def apply_matrix_coverage_to_leaves(
     db: Session,
     project: Project,
     leaves: list[TechOutline] | None = None,
 ) -> int:
-    """批量收尾：对有正文的叶子补写评分覆盖缺口。
+    """批量收尾：清空旧矩阵缺口后按合并正文重判。
 
     普通评分项缺口：green → yellow；
     刚性风险项缺口：直接打 red，以便导出拦截自动生效。
+    覆盖已齐全时会清掉过期的矩阵告警，并在无其它问题时回退 green。
     """
     if leaves is None:
         leaves = (
@@ -209,19 +224,52 @@ def apply_matrix_coverage_to_leaves(
     for chapter in leaves:
         if not (chapter.generated_content or "").strip():
             continue
-        if chapter.review_status not in ("green", "yellow"):
+        if chapter.review_status == "generating":
             continue
-        issues = matrix_issues_for_chapter(db, project, chapter)
-        if not issues:
+
+        existing = parse_review_errors(chapter.review_errors)
+        non_matrix = [e for e in existing if not _is_matrix_coverage_issue(e)]
+        had_matrix = len(non_matrix) < len(existing)
+        had_matrix_risk = any(
+            _is_matrix_coverage_issue(e) and e.startswith("刚性风险项") for e in existing
+        )
+
+        try:
+            issues = matrix_issues_for_chapter(db, project, chapter)
+        except Exception:
             continue
-        chapter.review_errors = merge_review_errors(chapter.review_errors, issues)
-        risk_issues = [i for i in issues if i.startswith("刚性风险项")]
-        if risk_issues:
-            # 刚性/否决项未覆盖：与生成失败同级，必须修复后才能导出
-            chapter.review_status = "red"
-        elif chapter.review_status == "green":
-            chapter.review_status = "yellow"
-        changed += 1
+
+        prev_status = chapter.review_status
+        prev_errors = chapter.review_errors
+
+        if issues:
+            chapter.review_errors = dump_review_errors(
+                list(dict.fromkeys(non_matrix + issues))
+            )
+            if any(i.startswith("刚性风险项") for i in issues):
+                chapter.review_status = "red"
+            elif chapter.review_status == "green":
+                chapter.review_status = "yellow"
+            elif (
+                chapter.review_status == "red"
+                and had_matrix_risk
+                and not non_matrix
+                and not any(i.startswith("刚性风险项") for i in issues)
+            ):
+                # 旧刚性误判已解除，仅剩普通评分缺口 → yellow
+                chapter.review_status = "yellow"
+        else:
+            chapter.review_errors = dump_review_errors(non_matrix)
+            if had_matrix_risk and chapter.review_status == "red":
+                chapter.review_status = "yellow" if non_matrix else "green"
+            elif chapter.review_status == "yellow" and not non_matrix and had_matrix:
+                chapter.review_status = "green"
+
+        if (
+            chapter.review_status != prev_status
+            or chapter.review_errors != prev_errors
+        ):
+            changed += 1
     return changed
 
 

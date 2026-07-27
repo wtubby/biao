@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from config import UPLOAD_DIR
 from db.database import get_db
-from db.models import GlobalFact, KnowledgeItem, Project, TechOutline, TechRequirement
+from db.models import GlobalFact, Project, ProjectKnowledgeFolder, TechOutline, TechRequirement
 from domains.registry import DEFAULT_DOMAIN
 from services.facts_service import init_default_facts, sync_basic_info_fact
 
@@ -188,11 +188,10 @@ def delete_project(project_id: str, db: Session = Depends(get_db)):
     db.query(TechRequirement).filter(TechRequirement.project_id == project_id).delete()
     db.query(TechOutline).filter(TechOutline.project_id == project_id).delete()
     db.query(GlobalFact).filter(GlobalFact.project_id == project_id).delete()
-    db.query(KnowledgeItem).filter(KnowledgeItem.project_id == project_id).delete()
-    from db.models import ChapterVersion, KnowledgeFolderStatus
+    from db.models import ChapterVersion
 
     db.query(ChapterVersion).filter(ChapterVersion.project_id == project_id).delete()
-    db.query(KnowledgeFolderStatus).filter(KnowledgeFolderStatus.project_id == project_id).delete()
+    db.query(ProjectKnowledgeFolder).filter(ProjectKnowledgeFolder.project_id == project_id).delete()
     db.delete(project)
     db.commit()
     upload_dir = Path(UPLOAD_DIR) / project_id

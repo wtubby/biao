@@ -11,7 +11,6 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 _model = None  # SentenceTransformer | False | 测试注入对象
-_EMBED_DIM = 512
 
 
 def _get_model():
@@ -72,11 +71,25 @@ def cosine_scores(query_vec: np.ndarray, matrix: np.ndarray) -> np.ndarray:
 
 
 def to_blob(vec: np.ndarray) -> bytes:
-    return vec.astype(np.float32).tobytes()
+    """序列化向量：前 4 字节小端 int32 存维度，后接 float32 数据。"""
+    dim = np.int32(vec.shape[0])
+    return dim.tobytes() + vec.astype(np.float32).tobytes()
 
 
-def from_blob(blob: bytes, dim: int = _EMBED_DIM) -> np.ndarray:
-    return np.frombuffer(blob, dtype=np.float32).reshape(dim)
+def from_blob(blob: bytes, dim: int | None = None) -> np.ndarray:
+    """从 blob 还原向量。优先读头部维度；旧格式（无头部）按长度或 dim 推断。"""
+    if len(blob) >= 8:
+        header_dim = int(np.frombuffer(blob[:4], dtype=np.int32)[0])
+        expected = 4 + header_dim * 4
+        if 0 < header_dim <= 16384 and len(blob) == expected:
+            return np.frombuffer(blob[4:], dtype=np.float32).reshape(header_dim)
+    # 旧格式：纯 float32 字节流（兼容升级前写入的数据）
+    if dim is not None:
+        return np.frombuffer(blob, dtype=np.float32).reshape(dim)
+    if len(blob) == 0 or len(blob) % 4 != 0:
+        raise ValueError(f"invalid embedding blob length: {len(blob)}")
+    inferred = len(blob) // 4
+    return np.frombuffer(blob, dtype=np.float32).reshape(inferred)
 
 
 def text_hash(text: str) -> str:

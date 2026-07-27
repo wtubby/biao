@@ -9,11 +9,10 @@ from rank_bm25 import BM25Okapi
 from sqlalchemy.orm import Session
 
 from config import KNOWLEDGE_ROOT
-from db.models import KnowledgeFolderStatus, KnowledgeItem, Project
+from db.models import KnowledgeFolderStatus, KnowledgeItem, ProjectKnowledgeFolder
 from domains.registry import resolve_domain
 from llm.llm_client import call_llm_json
 from services import embedding_service
-from services.project_meta import get_meta
 from services.retrieval_core import rrf_merge, tokenize
 from services.retrieval_service import expand_tokens, format_labeled_chunk
 
@@ -37,30 +36,15 @@ def _extract_prompt(domain: str | None) -> str:
 _ACTIVE_PROCESSING: set[str] = set()
 
 
-def _folder_key(project_id: str, folder_path: str) -> str:
-    return f"{project_id}:{folder_path}"
-
-
-def _get_or_create_status(
-    project_id: str,
-    folder_path: str,
-    db: Session,
-) -> KnowledgeFolderStatus:
+def _get_or_create_status(folder_path: str, db: Session) -> KnowledgeFolderStatus:
     row = (
         db.query(KnowledgeFolderStatus)
-        .filter(
-            KnowledgeFolderStatus.project_id == project_id,
-            KnowledgeFolderStatus.folder_path == folder_path,
-        )
+        .filter(KnowledgeFolderStatus.folder_path == folder_path)
         .first()
     )
     if row:
         return row
-    row = KnowledgeFolderStatus(
-        project_id=project_id,
-        folder_path=folder_path,
-        status="pending",
-    )
+    row = KnowledgeFolderStatus(folder_path=folder_path, status="pending")
     db.add(row)
     db.commit()
     db.refresh(row)
@@ -68,7 +52,6 @@ def _get_or_create_status(
 
 
 def _set_folder_status(
-    project_id: str,
     folder_path: str,
     db: Session,
     *,
@@ -76,7 +59,7 @@ def _set_folder_status(
     error_message: str | None = None,
     item_count: int | None = None,
 ) -> None:
-    row = _get_or_create_status(project_id, folder_path, db)
+    row = _get_or_create_status(folder_path, db)
     row.status = status
     row.error_message = error_message
     if item_count is not None:
@@ -85,45 +68,29 @@ def _set_folder_status(
     db.commit()
 
 
-def mark_folder_processing(project_id: str, folder_path: str, db: Session) -> None:
-    _set_folder_status(
-        project_id,
-        folder_path,
-        db,
-        status="processing",
-        error_message=None,
-    )
+def mark_folder_processing(folder_path: str, db: Session) -> None:
+    _set_folder_status(folder_path, db, status="processing", error_message=None)
 
 
-def mark_folder_failed(
-    project_id: str,
-    folder_path: str,
-    db: Session,
-    error_message: str,
-) -> None:
+def mark_folder_failed(folder_path: str, db: Session, error_message: str) -> None:
     _set_folder_status(
-        project_id,
         folder_path,
         db,
         status="failed",
         error_message=error_message,
-        item_count=get_folder_item_count(folder_path, project_id, db),
+        item_count=get_folder_item_count(folder_path, db),
     )
 
 
-def get_folder_status_detail(project_id: str, folder_path: str, db: Session) -> dict:
+def get_folder_status_detail(folder_path: str, db: Session) -> dict:
     row = (
         db.query(KnowledgeFolderStatus)
-        .filter(
-            KnowledgeFolderStatus.project_id == project_id,
-            KnowledgeFolderStatus.folder_path == folder_path,
-        )
+        .filter(KnowledgeFolderStatus.folder_path == folder_path)
         .first()
     )
-    key = _folder_key(project_id, folder_path)
-    count = get_folder_item_count(folder_path, project_id, db)
+    count = get_folder_item_count(folder_path, db)
 
-    if row and row.status == "processing" and key not in _ACTIVE_PROCESSING:
+    if row and row.status == "processing" and folder_path not in _ACTIVE_PROCESSING:
         updated_at = row.updated_at
         if updated_at.tzinfo is None:
             updated_at = updated_at.replace(tzinfo=timezone.utc)
@@ -131,12 +98,7 @@ def get_folder_status_detail(project_id: str, folder_path: str, db: Session) -> 
         if age_seconds > _STALE_PROCESSING_SECONDS:
             error = row.error_message or "处理中断（服务已重启）"
             _set_folder_status(
-                project_id,
-                folder_path,
-                db,
-                status="failed",
-                error_message=error,
-                item_count=count,
+                folder_path, db, status="failed", error_message=error, item_count=count
             )
             return {"status": "failed", "error": error, "count": count}
         return {"status": "processing", "error": None, "count": count}
@@ -158,22 +120,18 @@ def get_folder_status_detail(project_id: str, folder_path: str, db: Session) -> 
     }
 
 
-def get_folder_status(project_id: str, folder_path: str, db: Session) -> str:
-    return get_folder_status_detail(project_id, folder_path, db)["status"]
+def get_folder_status(folder_path: str, db: Session) -> str:
+    return get_folder_status_detail(folder_path, db)["status"]
 
 
-def get_folder_item_count(folder_path: str, project_id: str, db: Session) -> int:
+def get_folder_item_count(folder_path: str, db: Session) -> int:
+    return db.query(KnowledgeItem).filter(KnowledgeItem.folder_path == folder_path).count()
+
+
+def list_items(folder_path: str, db: Session) -> list[KnowledgeItem]:
     return (
         db.query(KnowledgeItem)
-        .filter(KnowledgeItem.project_id == project_id, KnowledgeItem.folder_path == folder_path)
-        .count()
-    )
-
-
-def list_items(folder_path: str, project_id: str, db: Session) -> list[KnowledgeItem]:
-    return (
-        db.query(KnowledgeItem)
-        .filter(KnowledgeItem.project_id == project_id, KnowledgeItem.folder_path == folder_path)
+        .filter(KnowledgeItem.folder_path == folder_path)
         .order_by(KnowledgeItem.sort_order)
         .all()
     )
@@ -215,31 +173,24 @@ def _embed_items(items: list[KnowledgeItem], db: Session) -> None:
     db.commit()
 
 
-def extract_knowledge_items(folder_path: str, project_id: str, db: Session) -> list[KnowledgeItem]:
-    key = _folder_key(project_id, folder_path)
-    _ACTIVE_PROCESSING.add(key)
-    mark_folder_processing(project_id, folder_path, db)
+def extract_knowledge_items(
+    folder_path: str,
+    db: Session,
+    *,
+    domain: str | None = None,
+) -> list[KnowledgeItem]:
+    """全局抽取一个知识文件夹；调用方不再传 project_id 参与存储。"""
+    _ACTIVE_PROCESSING.add(folder_path)
+    mark_folder_processing(folder_path, db)
     try:
-        project = db.query(Project).filter(Project.id == project_id).first()
-        domain = get_meta(project).get("engineering_domain") if project else None
         extract_prompt = _extract_prompt(domain)
 
-        db.query(KnowledgeItem).filter(
-            KnowledgeItem.project_id == project_id,
-            KnowledgeItem.folder_path == folder_path,
-        ).delete()
+        db.query(KnowledgeItem).filter(KnowledgeItem.folder_path == folder_path).delete()
         db.commit()
 
         texts = _read_folder_texts(folder_path)
         if not texts:
-            _set_folder_status(
-                project_id,
-                folder_path,
-                db,
-                status="pending",
-                error_message=None,
-                item_count=0,
-            )
+            _set_folder_status(folder_path, db, status="pending", error_message=None, item_count=0)
             return []
 
         items: list[KnowledgeItem] = []
@@ -263,7 +214,6 @@ def extract_knowledge_items(folder_path: str, project_id: str, db: Session) -> l
                 if not title or not content:
                     continue
                 item = KnowledgeItem(
-                    project_id=project_id,
                     folder_path=folder_path,
                     source_file=source_file,
                     title=title,
@@ -278,7 +228,6 @@ def extract_knowledge_items(folder_path: str, project_id: str, db: Session) -> l
         db.commit()
         if not items:
             _set_folder_status(
-                project_id,
                 folder_path,
                 db,
                 status="failed",
@@ -289,27 +238,52 @@ def extract_knowledge_items(folder_path: str, project_id: str, db: Session) -> l
 
         _embed_items(items, db)
         _set_folder_status(
-            project_id,
-            folder_path,
-            db,
-            status="ready",
-            error_message=None,
-            item_count=len(items),
+            folder_path, db, status="ready", error_message=None, item_count=len(items)
         )
         return items
     except Exception as exc:
-        logger.exception("知识库条目提取失败 %s/%s", project_id, folder_path)
+        logger.exception("知识库条目提取失败 %s", folder_path)
         _set_folder_status(
-            project_id,
             folder_path,
             db,
             status="failed",
             error_message=str(exc),
-            item_count=get_folder_item_count(folder_path, project_id, db),
+            item_count=get_folder_item_count(folder_path, db),
         )
         raise
     finally:
-        _ACTIVE_PROCESSING.discard(key)
+        _ACTIVE_PROCESSING.discard(folder_path)
+
+
+def enable_folder_for_project(project_id: str, folder_path: str, db: Session) -> None:
+    exists = (
+        db.query(ProjectKnowledgeFolder)
+        .filter(
+            ProjectKnowledgeFolder.project_id == project_id,
+            ProjectKnowledgeFolder.folder_path == folder_path,
+        )
+        .first()
+    )
+    if not exists:
+        db.add(ProjectKnowledgeFolder(project_id=project_id, folder_path=folder_path))
+        db.commit()
+
+
+def list_enabled_folders(project_id: str, db: Session) -> list[str]:
+    rows = (
+        db.query(ProjectKnowledgeFolder.folder_path)
+        .filter(ProjectKnowledgeFolder.project_id == project_id)
+        .all()
+    )
+    return [r[0] for r in rows]
+
+
+def disable_folder_for_project(project_id: str, folder_path: str, db: Session) -> None:
+    db.query(ProjectKnowledgeFolder).filter(
+        ProjectKnowledgeFolder.project_id == project_id,
+        ProjectKnowledgeFolder.folder_path == folder_path,
+    ).delete()
+    db.commit()
 
 
 def _format_item(item: KnowledgeItem, folder_path: str | None = None) -> str:
@@ -363,7 +337,13 @@ def _semantic_rank_items(items: list[KnowledgeItem], query: str) -> list[int]:
             continue
         try:
             indexed.append((i, embedding_service.from_blob(blob)))
-        except (ValueError, TypeError):
+        except ValueError:
+            logger.warning(
+                "embedding blob 维度不匹配，folder=%s，可能是模型已切换但历史数据未重新计算",
+                getattr(item, "folder_path", None),
+            )
+            continue
+        except TypeError:
             continue
     if not indexed:
         return []
@@ -379,13 +359,12 @@ def _semantic_rank_items(items: list[KnowledgeItem], query: str) -> list[int]:
 def search_knowledge_items(
     query: str,
     folder_path: str,
-    project_id: str,
     db: Session,
     top_k: int = 5,
     *,
     use_vector: bool = True,
 ) -> list[str]:
-    items = list_items(folder_path, project_id, db)
+    items = list_items(folder_path, db)
     if not items:
         return []
     if not expand_tokens(tokenize(query)):
