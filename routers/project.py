@@ -48,7 +48,6 @@ class ProjectOut(BaseModel):
     has_source: bool = False
     source_type: str | None = None
     generation_mode: str = "full"
-    bid_scope: str = "technical"
 
     model_config = {"from_attributes": True}
 
@@ -76,7 +75,6 @@ def _project_out(project: Project) -> ProjectOut:
         has_source=source is not None,
         source_type=source.suffix.lstrip(".").lower() if source else None,
         generation_mode=get_generation_mode(project),
-        bid_scope=getattr(project, "bid_scope", None) or "technical",
     )
 
 

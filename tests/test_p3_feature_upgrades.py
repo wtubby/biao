@@ -1,4 +1,4 @@
-"""P3：暗标、以标写标无命中、刚性绑定、商务草稿等。"""
+"""P3：暗标、以标写标无命中、刚性绑定等。"""
 
 import sys
 import uuid
@@ -11,7 +11,6 @@ for _mod in ("jieba", "rank_bm25"):
 from db.database import SessionLocal, init_db
 from db.models import Project, TechOutline, TechRequirement
 from services.blind_bid_service import check_blind_bid_violations, detect_blind_bid, is_blind_bid
-from services.commercial_bid_service import build_commercial_draft
 from services.generation_config import update_generation_config
 from services.outline_service import validate_coverage
 from services.parser_service import apply_blind_bid_detection
@@ -167,20 +166,3 @@ def test_validate_coverage_blocks_uncovered_risk_by_default():
         assert result2["require_risk_binding"] is False
     finally:
         db.close()
-
-
-def test_commercial_draft_builds_from_tender_detail():
-    project = Project(id="p-com", name="示范变电站工程", status="confirming", extra_params="{}")
-    detail = empty_tender_detail()
-    detail["commerce_requirements"] = "投标保证金 50 万元"
-    detail["qualification_items"] = [
-        {"seq": 1, "item_label": "资格性审查", "description": "具备电力承装资质"}
-    ]
-    detail["commerce_scores"] = [
-        {"title": "业绩", "criteria": "近三年同类业绩", "score_value": 10}
-    ]
-    set_tender_detail(project, detail)
-    draft = build_commercial_draft(project)
-    assert "商务与资格响应" in draft["markdown"]
-    assert draft["qualification_count"] == 1
-    assert "具备电力承装资质" in draft["markdown"]

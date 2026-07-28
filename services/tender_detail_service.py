@@ -1,4 +1,4 @@
-"""钛投标式招标文件解析结果：投标人须知 / 商务·技术要求 / 资格审查 / 评分要求。"""
+"""钛投标式招标文件解析结果：投标人须知 / 技术要求 / 资格审查 / 评分要求。"""
 
 from __future__ import annotations
 
@@ -102,11 +102,9 @@ def empty_notice() -> dict[str, Any]:
 def empty_tender_detail() -> dict[str, Any]:
     return {
         "notice": empty_notice(),
-        "commerce_requirements": "",
         "service_requirements": "",
         "bid_reference_catalog": "",
         "qualification_items": [],
-        "commerce_scores": [],
     }
 
 
@@ -182,46 +180,13 @@ def _normalize_qualification_items(items: list | None) -> list[dict[str, Any]]:
     return normalized
 
 
-def _normalize_score_items(items: list | None) -> list[dict[str, Any]]:
-    if not isinstance(items, list):
-        return []
-    normalized: list[dict[str, Any]] = []
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        title = str(item.get("title") or item.get("requirement_title") or "").strip()
-        criteria = str(item.get("criteria") or item.get("source_text") or "").strip()
-        if not title and not criteria:
-            continue
-        score_value = item.get("score_value")
-        try:
-            score_value = float(score_value) if score_value is not None else None
-        except (TypeError, ValueError):
-            score_value = None
-        normalized.append({
-            "title": title or "未命名评分项",
-            "criteria": criteria,
-            "score_value": score_value,
-        })
-    return normalized
-
-
 def _normalize_tender_detail(raw: dict[str, Any]) -> dict[str, Any]:
     return {
         "notice": _normalize_notice(raw.get("notice")),
-        "commerce_requirements": str(raw.get("commerce_requirements") or ""),
         "service_requirements": str(raw.get("service_requirements") or ""),
         "bid_reference_catalog": str(raw.get("bid_reference_catalog") or ""),
         "qualification_items": _normalize_qualification_items(raw.get("qualification_items")),
-        "commerce_scores": _normalize_score_items(raw.get("commerce_scores")),
     }
-
-
-def _commerce_score_dedupe_key(item: dict[str, Any]) -> tuple[str, str]:
-    """商务评分项去重键：title + criteria 前缀，避免「未命名评分项」撞车吞数据。"""
-    title = str(item.get("title") or "").strip()
-    criteria = str(item.get("criteria") or "").strip()
-    return (title, criteria[:80])
 
 
 def merge_tender_detail(target: dict[str, Any], incoming: dict[str, Any]) -> None:
@@ -231,7 +196,7 @@ def merge_tender_detail(target: dict[str, Any], incoming: dict[str, Any]) -> Non
         if value is not None and value != "" and not notice.get(key):
             notice[key] = value
 
-    for field in ("commerce_requirements", "service_requirements", "bid_reference_catalog"):
+    for field in ("service_requirements", "bid_reference_catalog"):
         cur = (target.get(field) or "").strip()
         new = (inc.get(field) or "").strip()
         if new and len(new) > len(cur):
@@ -246,15 +211,6 @@ def merge_tender_detail(target: dict[str, Any], incoming: dict[str, Any]) -> Non
         if key and key not in seen_keys:
             target.setdefault("qualification_items", []).append(item)
             seen_keys.add(key)
-
-    seen_scores = {
-        _commerce_score_dedupe_key(i) for i in target.get("commerce_scores") or []
-    }
-    for item in inc["commerce_scores"]:
-        key = _commerce_score_dedupe_key(item)
-        if key not in seen_scores:
-            target.setdefault("commerce_scores", []).append(item)
-            seen_scores.add(key)
 
 
 def apply_notice_to_project(

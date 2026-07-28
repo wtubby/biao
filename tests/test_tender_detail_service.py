@@ -115,39 +115,16 @@ def test_merge_tender_detail_fills_notice_and_dedupes():
     target = empty_tender_detail()
     incoming = {
         "notice": {"project_name": "电缆工程", "project_code": "ZB-001"},
-        "commerce_requirements": "投标保证金 6 万元",
+        "service_requirements": "YJV22 电缆",
         "qualification_items": [
             {"seq": 1, "item_label": "资格性废标", "description": "无营业执照"},
-        ],
-        "commerce_scores": [
-            {"title": "业绩", "criteria": "有业绩得 5 分", "score_value": 5},
         ],
     }
     merge_tender_detail(target, incoming)
     merge_tender_detail(target, incoming)
     assert target["notice"]["project_name"] == "电缆工程"
     assert len(target["qualification_items"]) == 1
-    assert len(target["commerce_scores"]) == 1
-
-
-def test_merge_tender_detail_keeps_unnamed_scores_with_different_criteria():
-    """标题缺失时兜底名相同，不能仅按 title 去重吞掉不同评分项。"""
-    target = empty_tender_detail()
-    incoming = {
-        "commerce_scores": [
-            {"title": "", "criteria": "报价合理性，满分5分", "score_value": 5},
-            {"title": "", "criteria": "付款方式优惠程度，满分3分", "score_value": 3},
-        ],
-    }
-    merge_tender_detail(target, incoming)
-    assert len(target["commerce_scores"]) == 2
-    assert {s["criteria"] for s in target["commerce_scores"]} == {
-        "报价合理性，满分5分",
-        "付款方式优惠程度，满分3分",
-    }
-    # 真正重复（同 title + 同 criteria）仍应去重
-    merge_tender_detail(target, incoming)
-    assert len(target["commerce_scores"]) == 2
+    assert "YJV22" in target["service_requirements"]
 
 
 def test_filter_qualification_items_by_tab():
@@ -208,10 +185,8 @@ def test_save_tender_detail_from_extraction_syncs_project():
             },
             "tender_detail": {
                 "notice": {"tenderer": "四川某电力公司"},
-                "commerce_requirements": "保证金 6 万",
                 "service_requirements": "YJV22 电缆",
                 "qualification_items": [],
-                "commerce_scores": [],
             },
         }
         save_tender_detail_from_extraction(project, result)

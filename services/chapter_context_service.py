@@ -47,18 +47,23 @@ _KEY_CHAPTER_KEYWORDS = ("施工方案", "技术方案", "施工组织", "总体
 def _resolve_recommended_standards(db: Session, domain: str | None, chapter_title: str) -> str:
     if not domain:
         return ""
+    from services.retrieval_core import tokenize
     from services.standards_service import list_standards
 
     rows = list_standards(db, domain=domain, status="active")
     if not rows:
         return ""
-    title_kw = set(chapter_title or "")
+    title_tokens = set(tokenize(chapter_title or ""))
+    if not title_tokens:
+        return ""
 
     def _score(r: dict) -> int:
-        return len(title_kw & set(r.get("title") or ""))
+        return len(title_tokens & set(tokenize(r.get("title") or "")))
 
     scored = sorted(rows, key=_score, reverse=True)[:8]
-    scored = [r for r in scored if _score(r) > 0] or rows[:5]
+    scored = [r for r in scored if _score(r) > 0]
+    if not scored:
+        return ""
     lines = [
         f"- {r['raw_code']}《{r['title']}》"
         + (f"：{r['summary']}" if r.get("summary") else "")

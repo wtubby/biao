@@ -93,7 +93,6 @@ def test_bootstrap_from_knowledge_base_creates_draft_and_chunk_links(tmp_path, m
     (knowledge_dir / "sample.txt").write_text(body, encoding="utf-8")
 
     monkeypatch.setattr("config.KNOWLEDGE_ROOT", str(tmp_path))
-    monkeypatch.setattr("services.standards_service.KNOWLEDGE_ROOT", str(tmp_path))
     monkeypatch.setattr(
         "services.standards_service._resolve_bootstrap_folders",
         lambda domain=None: [folder_name],

@@ -26,7 +26,6 @@ class Project(Base):
     transformer_count: Mapped[str | None] = mapped_column(Text, nullable=True)
     location: Mapped[str | None] = mapped_column(Text, nullable=True)
     extra_params: Mapped[str | None] = mapped_column(Text, nullable=True)
-    bid_scope: Mapped[str] = mapped_column(Text, default="technical")
     status: Mapped[str] = mapped_column(Text, default="draft")
     pause_requested: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
@@ -156,22 +155,6 @@ class ChapterVersion(Base):
     review_status: Mapped[str | None] = mapped_column(Text, nullable=True)
     char_count: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
-
-
-class CommercialSection(Base):
-    """商务/资格响应章节（模板轨道，不走技术标 LLM 逐章流程）。"""
-
-    __tablename__ = "commercial_sections"
-
-    id: Mapped[str] = mapped_column(Text, primary_key=True, default=_uuid)
-    project_id: Mapped[str] = mapped_column(Text, index=True)
-    section_key: Mapped[str] = mapped_column(Text)  # notice|commerce_requirement|qualification|commerce_score
-    match_key: Mapped[str] = mapped_column(Text, default="")  # 稳定匹配键，regenerate 时保留 confirmed
-    title: Mapped[str] = mapped_column(Text)
-    content_markdown: Mapped[str] = mapped_column(Text, default="")
-    status: Mapped[str] = mapped_column(Text, default="draft")  # draft | confirmed
-    sort_order: Mapped[int] = mapped_column(Integer, default=0)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 
 
 class StandardReference(Base):

@@ -10,7 +10,7 @@ const chunksDir = join(outdir, "chunks");
 const require = createRequire(import.meta.url);
 
 if (!existsSync(src)) {
-  console.error("缺少 frontend/src/app.jsx，请先运行 node scripts/split_frontend.mjs");
+  console.error("缺少 frontend/src/app.jsx，请确认前端源码目录完整");
   process.exit(1);
 }
 

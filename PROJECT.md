@@ -47,7 +47,7 @@ flowchart TB
         R2 --> R3[outline]
         R3 --> R4[generate]
         R4 --> R5[export]
-        R6[knowledge / facts / commercial]
+        R6[knowledge / facts]
     end
 
     subgraph SVC["服务层 (services/)"]
@@ -99,17 +99,15 @@ draft → parsing → confirming → planning → outline_locked → generating 
 | `generating` | 生成中 | SSE 实时进度、单章重生成 |
 | `done` | 完成 | 预览、编辑、导出 Word |
 
-### 4.2 用户工作流（7 步）
+### 4.2 用户工作流（5 步）
 
 | 步骤 | 名称 | 说明 | 是否可选 |
 |------|------|------|---------|
 | 1 | 上传标书 | 上传 PDF/DOCX 招标文件，自动解析评分项 | 必选 |
 | 2 | 确认评分项 | 核对评分项与工程全局参数，确认刚性风险项 | 必选 |
-| 3 | 商务标 | 编辑并确认商务/资格响应草稿，导出独立分册 | 可选 |
-| 4 | 全局事实变量 | 维护技术方案引用的全局事实，保证全书数字、人名、品牌一致 | 可选 |
-| 5 | 大纲编辑 | AI 深化大纲，可手动增删改章节与写作指导 | 必选 |
-| 6 | 内容生成 | 按章节批量或单章生成技术方案正文 | 必选 |
-| 7 | 预览与导出 | 审阅、修改章节内容并导出 Word 文档 | 必选 |
+| 3 | 大纲编辑 | AI 深化大纲，可手动增删改章节与写作指导 | 必选 |
+| 4 | 内容生成 | 按章节批量或单章生成技术方案正文 | 必选 |
+| 5 | 预览与导出 | 审阅、修改章节内容并导出 Word 文档 | 必选 |
 
 ### 4.3 单章生成流水线（核心 AI 逻辑）
 
@@ -142,7 +140,6 @@ biao/
 │   ├── outline.py          # 大纲生成/编辑/锁定
 │   ├── generate.py         # 内容生成、SSE 进度、章节编辑
 │   ├── export.py           # Word/PDF 导出
-│   ├── commercial.py       # 商务标轨道
 │   ├── facts.py            # 全局事实变量
 │   ├── knowledge.py        # 项目级知识条目
 │   ├── settings.py         # LLM 配置
@@ -214,7 +211,6 @@ biao/
 | `knowledge_items` | 项目级知识条目（参考标书片段） |
 | `knowledge_chunks` | 通用知识库分片（BM25/向量索引） |
 | `chapter_versions` | 章节内容版本历史 |
-| `commercial_sections` | 商务标章节（独立轨道，不走 LLM 逐章生成） |
 
 ---
 
@@ -281,7 +277,6 @@ biao/
 - Markdown 表格、列表、高亮标记渲染
 - 内嵌图表：`[flow:...]`、`[gantt:...]`、`[org:...]` 等 DSL 转 Graphviz 图片
 - 暗标模式：自动脱敏封面与页眉
-- 商务标独立分册导出
 
 ---
 
@@ -289,7 +284,7 @@ biao/
 
 - **无 SPA 框架**：React + Ant Design，通过 esbuild 打包为单个 `app.js`
 - **双视图**：项目列表 ↔ 项目工作台
-- **工作台侧边栏**：7 步工作流导航，状态驱动自动跳转
+- **工作台侧边栏**：5 步工作流导航，状态驱动自动跳转
 - **实时进度**：生成阶段通过 SSE（`sse_manager`）推送章节状态
 
 主要 UI 模块：
@@ -301,8 +296,7 @@ biao/
 | `OutlineEditor` / `OutlineTreeEditor` | 大纲树编辑 |
 | `GenerationPanel` | 批量/单章生成 |
 | `PreviewExport` | 预览与 Word 导出 |
-| `CommercialPanel` | 商务标编辑 |
-| `GlobalFactsPanel` | 全局事实变量 |
+| `GlobalFactsPanel` | 全局写作约束（大纲页可折叠编辑） |
 
 ---
 
@@ -321,7 +315,6 @@ biao/
 | `test_compliance_service.py` (13) | 合规检查 |
 | `test_document_parser.py` | 文档解析 |
 | `test_tender_detail_service.py` | 招标详情 |
-| `test_commercial_router.py` | 商务标 API |
 
 运行测试：
 

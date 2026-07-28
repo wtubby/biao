@@ -97,19 +97,11 @@ class QualificationItemUpdate(BaseModel):
     source_page: int | None = None
 
 
-class CommerceScoreUpdate(BaseModel):
-    title: str
-    criteria: str = ""
-    score_value: float | None = None
-
-
 class TenderDetailUpdate(BaseModel):
     notice: TenderNoticeUpdate | None = None
-    commerce_requirements: str | None = None
     service_requirements: str | None = None
     bid_reference_catalog: str | None = None
     qualification_items: list[QualificationItemUpdate] | None = None
-    commerce_scores: list[CommerceScoreUpdate] | None = None
 
 
 def _parse_job_key(project_id: str) -> str:
@@ -254,8 +246,6 @@ def update_project_tender_detail(
         if confirm_fields:
             mark_fields_manually_confirmed(project, confirm_fields)
 
-    if body.commerce_requirements is not None:
-        detail["commerce_requirements"] = body.commerce_requirements
     if body.service_requirements is not None:
         detail["service_requirements"] = body.service_requirements
     if body.bid_reference_catalog is not None:
@@ -265,8 +255,6 @@ def update_project_tender_detail(
         detail["qualification_items"] = _normalize_qualification_items(
             [item.model_dump() for item in body.qualification_items]
         )
-    if body.commerce_scores is not None:
-        detail["commerce_scores"] = [item.model_dump() for item in body.commerce_scores]
 
     set_tender_detail(project, detail)
     db.commit()

@@ -11,7 +11,6 @@ from db.database import engine
 logger = logging.getLogger(__name__)
 
 BID_SCOPE_TECHNICAL = "technical"
-BID_SCOPE_TECHNICAL_COMMERCIAL = "technical_commercial"
 
 
 def _table_columns(conn, table: str) -> set[str]:

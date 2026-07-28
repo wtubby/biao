@@ -2,13 +2,9 @@
 
 from __future__ import annotations
 
-import hashlib
-from pathlib import Path
-
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from config import KNOWLEDGE_ROOT
 from db.models import (
     KnowledgeChunk,
     StandardChangeLog,
@@ -273,61 +269,65 @@ def _ensure_chunks_for_folder(db: Session, folder: str) -> list[KnowledgeChunk]:
     if existing:
         return existing
 
-    root = Path(KNOWLEDGE_ROOT)
-    folder_dir = root / folder
-    if not folder_dir.is_dir():
-        return []
+    # 复用正式检索管线的段落切分 + 落库逻辑，而不是自己整篇文件当一个 chunk
+    from services.retrieval_service import _sync_chunks_to_db
+    return _sync_chunks_to_db(folder, db)
 
-    rows: list[KnowledgeChunk] = []
-    for path in sorted(folder_dir.rglob("*")):
-        if not path.is_file() or path.suffix.lower() not in {".txt", ".md"}:
-            continue
-        if path.name.startswith("_") or path.name.lower() == "readme.md":
-            continue
-        try:
-            text = path.read_text(encoding="utf-8", errors="ignore").strip()
-        except OSError:
-            continue
-        if len(text) < 10:
-            continue
-        chunk_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()[:40]
-        row = KnowledgeChunk(
-            folder_path=folder,
-            source_file=str(path.relative_to(root)).replace("\\", "/"),
-            chunk_hash=chunk_hash,
-            text=text,
+
+# SQLite 默认变量上限约 999；IN 分批避免超限
+_IN_BATCH = 500
+
+
+def _query_codes_in(db: Session, codes: set[str]) -> set[str]:
+    if not codes:
+        return set()
+    found: set[str] = set()
+    ordered = list(codes)
+    for i in range(0, len(ordered), _IN_BATCH):
+        batch = ordered[i : i + _IN_BATCH]
+        rows = (
+            db.query(StandardReference.code)
+            .filter(StandardReference.code.in_(batch))
+            .all()
         )
-        db.add(row)
-        rows.append(row)
-    if rows:
-        db.flush()
-    return rows
+        found.update(row.code for row in rows)
+    return found
 
 
-def _ensure_chunk_link(db: Session, code: str, chunk_id: str) -> None:
-    exists = (
-        db.query(StandardChunkLink)
-        .filter(
-            StandardChunkLink.code == code,
-            StandardChunkLink.chunk_id == chunk_id,
+def _query_chunk_links(db: Session, codes: set[str]) -> set[tuple[str, str]]:
+    if not codes:
+        return set()
+    found: set[tuple[str, str]] = set()
+    ordered = list(codes)
+    for i in range(0, len(ordered), _IN_BATCH):
+        batch = ordered[i : i + _IN_BATCH]
+        rows = (
+            db.query(StandardChunkLink.code, StandardChunkLink.chunk_id)
+            .filter(StandardChunkLink.code.in_(batch))
+            .all()
         )
-        .first()
-    )
-    if exists is None:
-        db.add(StandardChunkLink(code=code, chunk_id=chunk_id))
+        found.update((row.code, row.chunk_id) for row in rows)
+    return found
 
 
-def _ensure_domain_link(db: Session, code: str, domain_key: str) -> None:
-    exists = (
-        db.query(StandardDomainLink)
-        .filter(
-            StandardDomainLink.code == code,
-            StandardDomainLink.domain_key == domain_key,
+def _query_domain_links(db: Session, codes: set[str], domain_key: str) -> set[str]:
+    """返回已关联 domain_key 的 code 集合。"""
+    if not codes:
+        return set()
+    found: set[str] = set()
+    ordered = list(codes)
+    for i in range(0, len(ordered), _IN_BATCH):
+        batch = ordered[i : i + _IN_BATCH]
+        rows = (
+            db.query(StandardDomainLink.code)
+            .filter(
+                StandardDomainLink.code.in_(batch),
+                StandardDomainLink.domain_key == domain_key,
+            )
+            .all()
         )
-        .first()
-    )
-    if exists is None:
-        db.add(StandardDomainLink(code=code, domain_key=domain_key))
+        found.update(row.code for row in rows)
+    return found
 
 
 def bootstrap_from_knowledge_base(db: Session, *, domain: str | None = None) -> int:
@@ -336,28 +336,40 @@ def bootstrap_from_knowledge_base(db: Session, *, domain: str | None = None) -> 
     created = 0
     for folder in folders:
         chunks = _ensure_chunks_for_folder(db, folder)
+        # (core, raw, chunk_id)；同文件夹内批量查库，避免逐号 round-trip
+        pending: list[tuple[str, str, str]] = []
         for chunk in chunks:
-            codes = extract_standard_codes(chunk.text or "")
-            for raw in codes:
+            for raw in extract_standard_codes(chunk.text or ""):
                 core = normalize_code(raw)
-                if not core:
-                    continue
-                existing = (
-                    db.query(StandardReference)
-                    .filter(StandardReference.code == core)
-                    .first()
-                )
-                if existing is None:
-                    upsert_standard(
-                        db,
-                        code=core,
-                        raw_code=raw,
-                        status="draft",
-                        source_note="自动导入待人工核实",
-                    )
-                    created += 1
-                _ensure_chunk_link(db, core, chunk.id)
-                if domain:
-                    _ensure_domain_link(db, core, domain)
+                if core:
+                    pending.append((core, raw, chunk.id))
+        if not pending:
+            continue
+
+        cores = {core for core, _, _ in pending}
+        existing_codes = _query_codes_in(db, cores)
+        existing_chunk_links = _query_chunk_links(db, cores)
+        existing_domain_codes = (
+            _query_domain_links(db, cores, domain) if domain else set()
+        )
+
+        for core, raw, chunk_id in pending:
+            if core not in existing_codes:
+                data = {
+                    **_INSERT_DEFAULTS,
+                    "raw_code": raw,
+                    "status": "draft",
+                    "source_note": "自动导入待人工核实",
+                }
+                db.add(StandardReference(code=core, **data))
+                existing_codes.add(core)
+                created += 1
+            link_key = (core, chunk_id)
+            if link_key not in existing_chunk_links:
+                db.add(StandardChunkLink(code=core, chunk_id=chunk_id))
+                existing_chunk_links.add(link_key)
+            if domain and core not in existing_domain_codes:
+                db.add(StandardDomainLink(code=core, domain_key=domain))
+                existing_domain_codes.add(core)
         db.commit()
     return created

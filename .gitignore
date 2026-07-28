@@ -10,10 +10,12 @@ __pycache__/
 *.pyc
 .pytest_cache/
 node_modules/
-package-lock.json
 frontend/app.js
 frontend/chunks/
 venv/
 .venv/
 *.docx
 scripts/_uvicorn_*.txt
+test-results/
+tests/e2e/.fixtures.json
+playwright-report/

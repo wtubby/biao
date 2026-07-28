@@ -7,16 +7,11 @@ _EXTRACTION_SYSTEM_PROMPT_TEMPLATE = """你是一位工程类招投标文件分�
 提取项目名称、项目编号、包号/标段名称、预算、招标人、招标代理机构、项目所属领域、项目概况、
 是否专门面向中小微企业采购、是否暗标、工期等。同时提取技术标写作需要的：项目类型、承包模式、电压等级、工程规模。
 
-## 二、商务要求（tender_detail.commerce_requirements）
-将招标文件中的商务条款整理为结构化纯文本（Markdown 风格），包括但不限于：
-投标保证金、履约担保、合同签订与履行、付款方式与结算、违约责任、商务偏离、招标代理服务费等。
-按条目分段，保留关键金额、比例、时限。
-
-## 三、技术要求（tender_detail.service_requirements）
+## 二、技术要求（tender_detail.service_requirements）
 将技术标准、服务范围、设备参数、人员配置、交付验收、质量保修、★/实质性条款等整理为结构化纯文本。
 保留型号、数量、路径长度等关键数据。
 
-## 四、资格审查（tender_detail.qualification_items）
+## 三、资格审查（tender_detail.qualification_items）
 提取资格性审查、符合性审查及各类废标情形，每条包含：
 - seq：序号
 - item_label：如「资格性废标」「符合性废标」「实质性废标」「其他废标情形」
@@ -25,11 +20,10 @@ _EXTRACTION_SYSTEM_PROMPT_TEMPLATE = """你是一位工程类招投标文件分�
 - description：**归类摘要**（10~40 字），说明该条属于哪类审查/废标情形（如：财务要求、资质要求、人员要求、符合性废标等）；禁止复制 source_text 全文，禁止改写原文
 - 禁止只有改写没有原文：source_text 为空则该条无效
 
-## 五、评分要求
-- commerce_scores：商务评分表条目（title、criteria、score_value）
-- requirements：技术评分表条目（用于技术标生成，规则见下）
+## 四、评分要求（requirements）
+技术评分表条目（用于技术标生成，规则见下）。本系统不提取商务评分。
 
-## 六、投标文件参考格式（tender_detail.bid_reference_catalog）
+## 五、投标文件参考格式（tender_detail.bid_reference_catalog）
 从招标文件「投标文件格式」「投标文件组成」「技术文件格式」「技术部分格式」「施工组织设计纲要/大纲」等章节，摘录**技术标/技术部分**的目录结构。
 优先顺序：
 1. 技术标/技术部分/项目实施方案下的章节目录（含施工组织设计纲要列出的应含内容，整理为目录标题行）
@@ -45,7 +39,7 @@ _EXTRACTION_SYSTEM_PROMPT_TEMPLATE = """你是一位工程类招投标文件分�
 **JSON 输出硬约束（不得违反）：**
 - 必须输出合法的标准 JSON 对象，禁止 Markdown 代码块、前导/尾随说明文字
 - 字符串字段内的换行须转义为 \\n，双引号须转义为 \\"，反斜杠须转义为 \\\\
-- commerce_requirements、service_requirements 等长文本字段同样须符合 JSON 转义规则
+- service_requirements 等长文本字段同样须符合 JSON 转义规则
 - 若本段原文不完整，未出现的字段填 null 或 ""，禁止臆造
 
 **页码 source_page 规则：**
@@ -99,14 +93,10 @@ _EXTRACTION_SYSTEM_PROMPT_TEMPLATE = """你是一位工程类招投标文件分�
       "capacity": "工程规模或null",
       "target_pages": null
     },
-    "commerce_requirements": "商务要求整理文本",
     "service_requirements": "技术要求整理文本",
     "bid_reference_catalog": "技术标目录结构原文（投标文件格式章节摘录，无则空字符串）",
     "qualification_items": [
       {"seq": 1, "item_label": "资格性废标", "source_text": "招标文件原文逐字摘录", "source_page": null, "description": "资质要求类废标情形摘要"}
-    ],
-    "commerce_scores": [
-      {"title": "评分项", "criteria": "评分标准", "score_value": 10}
     ]
   },
   "contradictions": [
@@ -160,8 +150,8 @@ def get_extraction_system_prompt() -> str:
 EXTRACTION_SYSTEM_PROMPT = get_extraction_system_prompt()
 
 
-_EXTRACTION_TASK_PROMPT = """请从以下招标文件内容中，按钛投标五块结构提取：投标人须知、商务要求、技术要求、资格审查、评分要求（商务+技术），以及投标文件参考格式目录。
-技术评分项写入 requirements；商务评分项写入 tender_detail.commerce_scores。
+_EXTRACTION_TASK_PROMPT = """请从以下招标文件内容中，按结构提取：投标人须知、技术要求、资格审查、技术评分要求，以及投标文件参考格式目录。
+技术评分项写入 requirements；不要提取商务要求或商务评分。
 投标文件参考格式写入 tender_detail.bid_reference_catalog：重点找「第七章投标文件格式」「投标文件组成」「施工组织设计纲要」中的技术标/项目实施方案目录；有纲要内容要点时整理为目录标题，不要漏掉文末格式章节。
 
 【严格合规要求】

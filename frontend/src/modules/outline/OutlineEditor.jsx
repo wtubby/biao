@@ -26,6 +26,7 @@ import { fetchRequirements } from '../../api/requirements.js';
 import { PromptInspectorDrawer } from '../../components/PromptInspectorDrawer.jsx';
 import { DirectorySourceSwitch } from './components.jsx';
 import { OutlineTreeEditor } from './OutlineTreeEditor.jsx';
+import { GlobalFactsPanel } from '../facts/GlobalFactsPanel.jsx';
 import {
   getOrderedLeaves,
   getNodeDescendantIds, getNextSortOrder, recomputeOutlineStructure,
@@ -663,6 +664,13 @@ const OutlineEditor = forwardRef(function OutlineEditor({
   const showCatalog = wizardStep === 1;
 
   return (
+    <>
+      <details className="outline-facts-details" style={{ marginBottom: 12 }}>
+        <summary>全局写作约束（可选）</summary>
+        <div className="outline-facts-details-body">
+          <GlobalFactsPanel projectId={projectId} />
+        </div>
+      </details>
     <Card
       title={(
         <Space>
@@ -897,6 +905,7 @@ const OutlineEditor = forwardRef(function OutlineEditor({
         </Space>
       </Modal>
     </Card>
+    </>
   );
 });
 

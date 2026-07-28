@@ -11,11 +11,6 @@ from db.models import Project, TechOutline
 from services.assembler_service import assemble_document
 from services.blind_bid_service import check_blind_bid_violations, is_blind_bid
 from services.chapter_review_errors import parse_review_errors
-from services.commercial_bid_service import (
-    export_commercial_docx,
-    get_bid_scope,
-    validate_commercial_export_ready,
-)
 from services.compliance_service import (
     check_compliance_now,
     get_last_compliance_report,
@@ -200,38 +195,6 @@ def export_pdf(
         path=str(pdf_path),
         filename=Path(pdf_path).name,
         media_type="application/pdf",
-    )
-
-
-@router.get("/projects/{project_id}/export-commercial")
-def export_commercial(
-    project_id: str,
-    allow_draft: bool = False,
-    db: Session = Depends(get_db),
-):
-    from db.migrations import BID_SCOPE_TECHNICAL_COMMERCIAL
-
-    project = db.query(Project).filter(Project.id == project_id).first()
-    if not project:
-        raise HTTPException(404, "项目不存在")
-    if get_bid_scope(project) != BID_SCOPE_TECHNICAL_COMMERCIAL:
-        raise HTTPException(400, "未开启商务标生成范围，请先在确认页打开「技术标+商务标」")
-    try:
-        draft_count = validate_commercial_export_ready(
-            db, project, allow_draft=allow_draft
-        )
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    try:
-        out_path = export_commercial_docx(project, db=db)
-    except Exception as exc:
-        logger.exception("导出商务资格稿失败 project=%s: %s", project_id, exc)
-        raise HTTPException(500, f"导出失败: {exc}") from exc
-    return FileResponse(
-        path=str(out_path),
-        filename=Path(out_path).name,
-        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        headers={"X-Draft-Sections": str(draft_count)},
     )
 
 

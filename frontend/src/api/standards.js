@@ -38,6 +38,11 @@ export function bootstrapStandards(domain) {
   return apiFetch(`/standards/bootstrap${params}`, { method: 'POST' });
 }
 
+export function fetchBootstrapStatus(domain) {
+  const params = domain ? `?domain=${encodeURIComponent(domain)}` : '';
+  return apiFetch(`/standards/bootstrap/status${params}`);
+}
+
 export function fetchStandardCoverage() {
   return apiFetch('/standards/coverage');
 }

@@ -27,7 +27,6 @@ def _base_project(db, *, name: str, status: str) -> Project:
         capacity="50MVA",
         duration_days=180,
         location="测试市测试区",
-        bid_scope="technical",
         status=status,
         pause_requested=0,
     )

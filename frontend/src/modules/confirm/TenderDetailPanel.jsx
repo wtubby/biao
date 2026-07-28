@@ -22,8 +22,8 @@ const CONFIRM_WIZARD_STEPS = [
   {
     num: 2,
     shortTitle: '审查与评分',
-    title: '资格审查 · 评分要求 · 商务与技术要求',
-    hint: '本页可垂直滚动核对全部条款：资格审查、评分要求、商务与技术要求文本。技术评分中的刚性风险项须全部确认后方可进入大纲。',
+    title: '资格审查 · 评分要求 · 技术要求',
+    hint: '本页可垂直滚动核对全部条款：资格审查、技术评分、技术要求文本。技术评分中的刚性风险项须全部确认后方可进入大纲。',
   },
 ];
 
@@ -98,7 +98,6 @@ function TenderDetailPanel({
   const [detail, setDetail] = useState(null);
   const [parseSummary, setParseSummary] = useState(null);
   const [qualTab, setQualTab] = useState('废标项');
-  const [scoreTab, setScoreTab] = useState('tech');
   const [domainOptions, setDomainOptions] = useState(
     ENGINEERING_DOMAINS.map((d) => ({ key: d, label: d })),
   );
@@ -203,23 +202,7 @@ function TenderDetailPanel({
     }
   };
 
-  const saveCommerceScores = async () => {
-    setSavingSection('commerce_scores');
-    try {
-      const updated = await updateTenderDetail(projectId, {
-        commerce_scores: detail.commerce_scores,
-      });
-      setDetail(updated);
-      message.success('商务评分已保存');
-    } catch (e) {
-      message.error(e.message);
-    } finally {
-      setSavingSection('');
-    }
-  };
-
   const qualItems = detail?.qualification_items || [];
-  const commerceScores = detail?.commerce_scores || [];
 
   // 废标项数量 = 总数 − 资格性 − 符合性
   const qualTabCounts = useMemo(() => {
@@ -366,83 +349,6 @@ function TenderDetailPanel({
             编辑
           </Button>
         )
-      ),
-    },
-  ];
-
-  const locateCommerce = (record, idx) => {
-    if (!onLocateSource) return;
-    onLocateSource({
-      key: `commerce-${idx}`,
-      nonce: Date.now(),
-      text: record.criteria || record.title || '',
-      page: record.source_page || null,
-      title: record.title,
-    });
-  };
-
-  const commerceColumns = [
-    {
-      title: '评分项',
-      dataIndex: 'title',
-      width: 160,
-      render: (text, record, idx) => (
-        <Input
-          value={text}
-          size="small"
-          onChange={(e) => {
-            const next = [...commerceScores];
-            next[idx] = { ...record, title: e.target.value };
-            setDetail((d) => ({ ...d, commerce_scores: next }));
-          }}
-        />
-      ),
-    },
-    {
-      title: '评分标准',
-      dataIndex: 'criteria',
-      render: (text, record, idx) => (
-        <div>
-          <Input.TextArea
-            value={text}
-            autoSize={{ minRows: 2, maxRows: 8 }}
-            onChange={(e) => {
-              const next = [...commerceScores];
-              next[idx] = { ...record, criteria: e.target.value };
-              setDetail((d) => ({ ...d, commerce_scores: next }));
-            }}
-          />
-          {onLocateSource && (text || record.title) && (
-            <Button
-              type="link"
-              size="small"
-              className="score-locate-link"
-              style={{ padding: '4px 0 0', height: 'auto' }}
-              onClick={(e) => { e.stopPropagation(); locateCommerce(record, idx); }}
-            >
-              在原文中定位
-            </Button>
-          )}
-        </div>
-      ),
-    },
-    {
-      title: '分数',
-      dataIndex: 'score_value',
-      width: 90,
-      align: 'center',
-      render: (val, record, idx) => (
-        <InputNumber
-          value={val}
-          size="small"
-          min={0}
-          style={{ width: 72 }}
-          onChange={(v) => {
-            const next = [...commerceScores];
-            next[idx] = { ...record, score_value: v };
-            setDetail((d) => ({ ...d, commerce_scores: next }));
-          }}
-        />
       ),
     },
   ];
@@ -697,76 +603,14 @@ function TenderDetailPanel({
             description="请在下方技术评分表格中逐一点击「确认」；全部确认后底部按钮才可进入大纲。"
           />
         )}
-        <SectionTitle>评分要求</SectionTitle>
-        <Tabs
-          activeKey={scoreTab}
-          onChange={setScoreTab}
-          items={[
-            { key: 'commerce', label: '商务评分' },
-            { key: 'tech', label: '技术评分' },
-          ]}
+        <SectionTitle>技术评分</SectionTitle>
+        <RequirementsTable
+          projectId={projectId}
+          onStatsChange={onStatsChange}
+          onLocateSource={onLocateSource}
+          activeLocateKey={activeLocateKey}
         />
-        {scoreTab === 'commerce' ? (
-          <>
-            <Table
-              className="tender-score-table"
-              size="small"
-              rowKey={(r, i) => `c-${i}`}
-              columns={commerceColumns}
-              dataSource={commerceScores}
-              pagination={false}
-              scroll={{ x: 700 }}
-              rowClassName={(_, idx) => (
-                activeLocateKey === `commerce-${idx}` ? 'score-row-active' : ''
-              )}
-            />
-            <Space style={{ marginTop: 12 }}>
-              <Button
-                onClick={() => {
-                  setDetail((d) => ({
-                    ...d,
-                    commerce_scores: [...commerceScores, { title: '', criteria: '', score_value: null }],
-                  }));
-                }}
-              >
-                新增商务评分项
-              </Button>
-              <Button type="primary" onClick={saveCommerceScores} loading={savingSection === 'commerce_scores'}>
-                保存商务评分
-              </Button>
-            </Space>
-            <div className="tender-package-hint">当前包号：{packageLabel}</div>
-          </>
-        ) : (
-          <>
-            <RequirementsTable
-              projectId={projectId}
-              onStatsChange={onStatsChange}
-              onLocateSource={onLocateSource}
-              activeLocateKey={activeLocateKey}
-            />
-            <div className="tender-package-hint">当前包号：{packageLabel}</div>
-          </>
-        )}
-      </div>
-
-      <div className="tender-detail-block confirm-wizard-step">
-        <SectionTitle>商务要求</SectionTitle>
-        <Input.TextArea
-          className="tender-rich-text"
-          rows={16}
-          value={detail.commerce_requirements}
-          onChange={(e) => setDetail((d) => ({ ...d, commerce_requirements: e.target.value }))}
-          placeholder="商务条款整理内容..."
-        />
-        <EditTip />
-        <Button
-          style={{ marginTop: 12 }}
-          onClick={() => saveTextSection('commerce_requirements')}
-          loading={savingSection === 'commerce_requirements'}
-        >
-          保存商务要求
-        </Button>
+        <div className="tender-package-hint">当前包号：{packageLabel}</div>
       </div>
 
       <div className="tender-detail-block confirm-wizard-step">

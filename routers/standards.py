@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import io
+import logging
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from db.database import get_db
+from db.database import SessionLocal, get_db
+from services.background_jobs import is_job_running, spawn_sync
 from services.standards_service import (
     bootstrap_from_knowledge_base,
     get_standard_detail,
@@ -20,7 +22,12 @@ from services.standards_service import (
     upsert_standard,
 )
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/standards", tags=["standards"])
+
+# domain_key（或 "__all__"）-> {"status": "running"/"done"/"failed", ...}
+_bootstrap_progress: dict[str, dict] = {}
 
 
 class StandardUpsertBody(BaseModel):
@@ -100,10 +107,44 @@ async def import_standards(
     return import_standards_rows(db, rows)
 
 
+def _bootstrap_key(domain: str | None) -> str:
+    return domain or "__all__"
+
+
+def _run_bootstrap(domain: str | None) -> None:
+    db = SessionLocal()
+    key = _bootstrap_key(domain)
+    try:
+        count = bootstrap_from_knowledge_base(db, domain=domain)
+        _bootstrap_progress[key] = {"status": "done", "created": count}
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("标准库 bootstrap 失败 domain=%s", domain)
+        _bootstrap_progress[key] = {"status": "failed", "error": str(exc)}
+    finally:
+        db.close()
+
+
 @router.post("/bootstrap")
-def bootstrap_api(domain: str | None = None, db: Session = Depends(get_db)):
-    count = bootstrap_from_knowledge_base(db, domain=domain)
-    return {"created": count}
+def bootstrap_api(domain: str | None = None):
+    key = _bootstrap_key(domain)
+    dedupe_key = f"standards-bootstrap:{key}"
+    if is_job_running(dedupe_key):
+        return {"status": "already_running"}
+    _bootstrap_progress[key] = {"status": "running", "created": 0}
+    if not spawn_sync(
+        _run_bootstrap,
+        domain,
+        name=f"standards-bootstrap-{key}",
+        dedupe_key=dedupe_key,
+    ):
+        return {"status": "already_running"}
+    return {"status": "running"}
+
+
+@router.get("/bootstrap/status")
+def bootstrap_status_api(domain: str | None = None):
+    key = _bootstrap_key(domain)
+    return _bootstrap_progress.get(key, {"status": "idle"})
 
 
 @router.get("/{code}")

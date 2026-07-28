@@ -7,7 +7,7 @@ const { loadFixtures } = require('./loadFixtures');
  * 而不是直接跳出 confirm 整个大步骤（回到项目列表或跳到 upload）。
  *
  * 背景：confirm 步骤内部拆成 1~2 的 wizard 子步骤（1=工程信息，
- * 2=资格审查+评分要求+商务与技术要求合页），但 URL hash 只记录到
+ * 2=资格审查+技术评分+技术要求合页），但 URL hash 只记录到
  * 顶层 step（#/projects/{id}/confirm），子步骤是纯前端 state
  * （ProjectWorkspace.jsx 的 confirmWizardStep），不在 hash 里。
  * 所以这里验证的是"goPrev 在向导中间步骤时只回退子步骤"这条前端逻辑，
